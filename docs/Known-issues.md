@@ -68,6 +68,8 @@ This document lists known issues and their workarounds. For the latest updates, 
 ### Unsupported Distributions
 **Issue:** Bazzite, Linux Mint, Zorin OS, Manjaro, Ubuntu, Pop!_OS, and Debian are not officially supported.
 
+**Workaround for Debian/Ubuntu/Pop!_OS/Zorin OS/Linux Mint:** Install .NET 10 using [Microsoft's instructions](https://learn.microsoft.com/en-us/dotnet/core/install/linux-debian?tabs=dotnet10), then run the Python installer as normal.
+
 **Workaround:** Use the [AppImage installer](../INSTALLATION.md#1-appimage-recommended-for-beginners) instead. See [System Requirements](SYSTEM-REQUIREMENTS.md) for details.
 
 **Workaround:** Use the [AppImage installer](../INSTALLATION.md#1-appimage-recommended-for-beginners) instead.
