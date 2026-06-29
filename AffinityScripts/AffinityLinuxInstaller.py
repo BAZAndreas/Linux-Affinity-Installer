@@ -3502,52 +3502,52 @@ class AffinityInstallerGUI(QMainWindow):
         # Create button group to ensure only one radio button is selected at a time
         button_group = QButtonGroup(dialog)
 
-        # Wine 11.11 option - clean frame with radio button and description (Recommended)
-        wine_1111_frame = QFrame()
-        wine_1111_frame.setObjectName("optionFrame")
-        wine_1111_layout = QVBoxLayout(wine_1111_frame)
-        wine_1111_layout.setContentsMargins(12, 10, 12, 10)
-        wine_1111_layout.setSpacing(6)
-        wine_1111_radio = QRadioButton("Wine 11.11 (Recommended)")
-        wine_1111_radio.setChecked(True)
-        wine_1111_radio.setSizePolicy(
+        # Wine 11.12 option - clean frame with radio button and description (Recommended)
+        wine_1112_frame = QFrame()
+        wine_1112_frame.setObjectName("optionFrame")
+        wine_1112_layout = QVBoxLayout(wine_1112_frame)
+        wine_1112_layout.setContentsMargins(12, 10, 12, 10)
+        wine_1112_layout.setSpacing(6)
+        wine_1112_radio = QRadioButton("Wine 11.12 (Recommended)")
+        wine_1112_radio.setChecked(True)
+        wine_1112_radio.setSizePolicy(
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum
         )
-        wine_1111_layout.addWidget(wine_1111_radio)
-        wine_1111_desc = QLabel(
-            "ElementalWarrior Wine 11.11 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance for most systems."
+        wine_1112_layout.addWidget(wine_1112_radio)
+        wine_1112_desc = QLabel(
+            "ElementalWarrior Wine 11.12 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance for most systems."
         )
-        wine_1111_desc.setObjectName("optionDescription")
-        wine_1111_desc.setWordWrap(True)
-        wine_1111_desc.setSizePolicy(
+        wine_1112_desc.setObjectName("optionDescription")
+        wine_1112_desc.setWordWrap(True)
+        wine_1112_desc.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
         )
-        wine_1111_layout.addWidget(wine_1111_desc)
-        options_layout.addWidget(wine_1111_frame)
-        button_group.addButton(wine_1111_radio, 0)
+        wine_1112_layout.addWidget(wine_1112_desc)
+        options_layout.addWidget(wine_1112_frame)
+        button_group.addButton(wine_1112_radio, 0)
 
-        # Wine 11.11 v4 option - clean frame with radio button and description
-        wine_1111v4_frame = QFrame()
-        wine_1111v4_frame.setObjectName("optionFrame")
-        wine_1111v4_layout = QVBoxLayout(wine_1111v4_frame)
-        wine_1111v4_layout.setContentsMargins(12, 10, 12, 10)
-        wine_1111v4_layout.setSpacing(6)
-        wine_1111v4_radio = QRadioButton("Wine 11.11 v4 (Zen 4/5)")
-        wine_1111v4_radio.setSizePolicy(
+        # Wine 11.12 v4 option - clean frame with radio button and description
+        wine_1112v4_frame = QFrame()
+        wine_1112v4_frame.setObjectName("optionFrame")
+        wine_1112v4_layout = QVBoxLayout(wine_1112v4_frame)
+        wine_1112v4_layout.setContentsMargins(12, 10, 12, 10)
+        wine_1112v4_layout.setSpacing(6)
+        wine_1112v4_radio = QRadioButton("Wine 11.12 v4 (Zen 4/5)")
+        wine_1112v4_radio.setSizePolicy(
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum
         )
-        wine_1111v4_layout.addWidget(wine_1111v4_radio)
-        wine_1111v4_desc = QLabel(
-            "ElementalWarrior Wine 11.11 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs."
+        wine_1112v4_layout.addWidget(wine_1112v4_radio)
+        wine_1112v4_desc = QLabel(
+            "ElementalWarrior Wine 11.12 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs."
         )
-        wine_1111v4_desc.setObjectName("optionDescription")
-        wine_1111v4_desc.setWordWrap(True)
-        wine_1111v4_desc.setSizePolicy(
+        wine_1112v4_desc.setObjectName("optionDescription")
+        wine_1112v4_desc.setWordWrap(True)
+        wine_1112v4_desc.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
         )
-        wine_1111v4_layout.addWidget(wine_1111v4_desc)
-        options_layout.addWidget(wine_1111v4_frame)
-        button_group.addButton(wine_1111v4_radio, 1)
+        wine_1112v4_layout.addWidget(wine_1112v4_desc)
+        options_layout.addWidget(wine_1112v4_frame)
+        button_group.addButton(wine_1112v4_radio, 1)
 
         # Wine 10.10 option - clean frame with radio button and description
         wine_1010_frame = QFrame()
@@ -3625,10 +3625,10 @@ class AffinityInstallerGUI(QMainWindow):
         # Get result
         result = dialog.exec()
         if result == QDialog.DialogCode.Accepted:
-            if wine_1111_radio.isChecked():
-                self.question_dialog_response = "Wine 11.11 (Recommended)"
-            elif wine_1111v4_radio.isChecked():
-                self.question_dialog_response = "Wine 11.11 v4 (Zen 4/5)"
+            if wine_1112_radio.isChecked():
+                self.question_dialog_response = "Wine 11.12 (Recommended)"
+            elif wine_1112v4_radio.isChecked():
+                self.question_dialog_response = "Wine 11.12 v4 (Zen 4/5)"
             elif wine_1010_radio.isChecked():
                 self.question_dialog_response = "Wine 10.10"
             elif wine_914_radio.isChecked():
@@ -3871,7 +3871,7 @@ class AffinityInstallerGUI(QMainWindow):
         return self.get_wine_dir() / "bin" / binary
 
     def get_current_wine_version(self):
-        """Get the current ElementalWarrior Wine version (9.14, 10.10, or 11.11)"""
+        """Get the current ElementalWarrior Wine version (9.14, 10.10, or 11.12)"""
         # Try regular wine first
         wine = self.get_wine_path("wine")
         wine_staging = self.get_wine_path("wine-staging")
@@ -3893,7 +3893,7 @@ class AffinityInstallerGUI(QMainWindow):
                             elif version.startswith("10."):
                                 return "10.10"
                             elif version.startswith("11."):
-                                return "11.11"
+                                return "11.12"
                 except Exception:
                     continue
         return None
@@ -7494,18 +7494,18 @@ class AffinityInstallerGUI(QMainWindow):
         wine_version = self.show_question_dialog(
             "Choose Wine Version",
             "Which Wine version would you like to install?\n\n"
-            "• Wine 11.11 (Recommended) - ElementalWarrior Wine 11.11 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance.\n"
-            "• Wine 11.11 v4 (Zen 4/5) - ElementalWarrior Wine 11.11 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs.\n"
+            "• Wine 11.12 (Recommended) - ElementalWarrior Wine 11.12 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance.\n"
+            "• Wine 11.12 v4 (Zen 4/5) - ElementalWarrior Wine 11.12 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs.\n"
             "• Wine 10.10 - ElementalWarrior Wine 10.10 with AMD GPU and OpenCL patches. Previous stable version.\n"
             "• Wine 9.14 (Legacy) - Legacy version with AMD GPU and OpenCL patches. Fallback option if you encounter issues with newer versions.\n\n"
             "Note: You can switch versions later by running 'Setup Wine Environment' again.",
-            ["Wine 11.11 (Recommended)", "Wine 11.11 v4 (Zen 4/5)", "Wine 10.10", "Wine 9.14 (Legacy)"],
+            ["Wine 11.12 (Recommended)", "Wine 11.12 v4 (Zen 4/5)", "Wine 10.10", "Wine 9.14 (Legacy)"],
         )
 
-        if wine_version == "Wine 11.11 (Recommended)":
-            wine_version_choice = "11.11"
-        elif wine_version == "Wine 11.11 v4 (Zen 4/5)":
-            wine_version_choice = "11.11-v4"
+        if wine_version == "Wine 11.12 (Recommended)":
+            wine_version_choice = "11.12"
+        elif wine_version == "Wine 11.12 v4 (Zen 4/5)":
+            wine_version_choice = "11.12-v4"
         elif wine_version == "Wine 10.10":
             wine_version_choice = "10.10"
         elif wine_version == "Wine 9.14 (Legacy)":
@@ -9447,12 +9447,12 @@ class AffinityInstallerGUI(QMainWindow):
         self.log(f"All dependencies installed for {distro_name}", "success")
         return True
 
-    def setup_wine(self, wine_version="11.11"):
-        """Setup Wine environment - installs custom Wine 9.14, 10.10, 11.11, or 11.11-v4 with AMD GPU and OpenCL patches
+    def setup_wine(self, wine_version="11.12"):
+        """Setup Wine environment - installs custom Wine 9.14, 10.10, 11.12, or 11.12-v4 with AMD GPU and OpenCL patches
 
         Args:
             wine_version: "9.14" for Wine 9.14 (legacy), "10.10" for Wine 10.10,
-                          "11.11" for Wine 11.11 (recommended), or "11.11-v4" for Wine 11.11 v4 (AMD Zen 4/5)
+                          "11.12" for Wine 11.12 (recommended), or "11.12-v4" for Wine 11.12 v4 (AMD Zen 4/5)
         """
         self.start_operation("Setting up Wine environment")
 
@@ -9645,14 +9645,14 @@ class AffinityInstallerGUI(QMainWindow):
             if self.check_cancelled():
                 return False
 
-            # Setup WinMetadata (only needed for Wine 9.14 and 10.10, not 11.11+)
+            # Setup WinMetadata (only needed for Wine 9.14 and 10.10, not 11.12+)
             if wine_version in ["9.14", "10.10"]:
                 self.update_progress_text("Setting up Windows Metadata...")
                 self.update_progress(0.70)
                 self.setup_winmetadata()
             else:
                 self.log(
-                    "Skipping WinMetadata setup for Wine 11.11+ (not needed)", "info"
+                    "Skipping WinMetadata setup for Wine 11.12+ (not needed)", "info"
                 )
 
             if self.check_cancelled():
@@ -9922,7 +9922,7 @@ class AffinityInstallerGUI(QMainWindow):
         # Ensure system32 directory exists
         system32_dir.mkdir(parents=True, exist_ok=True)
 
-        # Reinstall WinMetadata by downloading and extracting (only for Wine < 11.11)
+        # Reinstall WinMetadata by downloading and extracting (only for Wine < 11.12)
         wine_version = self.get_current_wine_version()
         if wine_version in ["9.14", "10.10"]:
             self.log("Installing fresh WinMetadata...", "info")
@@ -9937,7 +9937,7 @@ class AffinityInstallerGUI(QMainWindow):
             self.copy_wintypes_dll_for_all_apps()
         else:
             self.log(
-                "Skipping WinMetadata and wintypes.dll setup for Wine 11.11+ (not needed)",
+                "Skipping WinMetadata and wintypes.dll setup for Wine 11.12+ (not needed)",
                 "info",
             )
 
@@ -10752,18 +10752,18 @@ class AffinityInstallerGUI(QMainWindow):
         wine_version = self.show_question_dialog(
             "Choose Wine Version",
             "Which Wine version would you like to install?\n\n"
-            "• Wine 11.11 (Recommended) - ElementalWarrior Wine 11.11 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance.\n"
-            "• Wine 11.11 v4 (Zen 4/5) - ElementalWarrior Wine 11.11 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs.\n"
+            "• Wine 11.12 (Recommended) - ElementalWarrior Wine 11.12 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance.\n"
+            "• Wine 11.12 v4 (Zen 4/5) - ElementalWarrior Wine 11.12 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs.\n"
             "• Wine 10.10 - ElementalWarrior Wine 10.10 with AMD GPU and OpenCL patches. Previous stable version.\n"
             "• Wine 9.14 (Legacy) - Legacy version with AMD GPU and OpenCL patches. Fallback option if you encounter issues with newer versions.\n\n"
             "Note: You can switch versions later by running this setup again.",
-            ["Wine 11.11 (Recommended)", "Wine 11.11 v4 (Zen 4/5)", "Wine 10.10", "Wine 9.14 (Legacy)"],
+            ["Wine 11.12 (Recommended)", "Wine 11.12 v4 (Zen 4/5)", "Wine 10.10", "Wine 9.14 (Legacy)"],
         )
 
-        if wine_version == "Wine 11.11 (Recommended)":
-            wine_version_choice = "11.11"
-        elif wine_version == "Wine 11.11 v4 (Zen 4/5)":
-            wine_version_choice = "11.11-v4"
+        if wine_version == "Wine 11.12 (Recommended)":
+            wine_version_choice = "11.12"
+        elif wine_version == "Wine 11.12 v4 (Zen 4/5)":
+            wine_version_choice = "11.12-v4"
         elif wine_version == "Wine 10.10":
             wine_version_choice = "10.10"
         elif wine_version == "Wine 9.14 (Legacy)":
@@ -10780,7 +10780,7 @@ class AffinityInstallerGUI(QMainWindow):
         """Get Wine version configuration (URL, filename, etc.)
 
         Args:
-            wine_version: "9.14", "10.10", or "11.11"
+            wine_version: "9.14", "10.10", or "11.12"
 
         Returns:
             dict with wine_url, wine_file_name, wine_dir_name, wine_dir_pattern, archive_format, wine_display_name
@@ -10803,30 +10803,30 @@ class AffinityInstallerGUI(QMainWindow):
                 "archive_format": "xz",
                 "wine_display_name": "Wine 10.10 (with AMD GPU and OpenCL patches)",
             }
-        elif wine_version == "11.11-v4":
+        elif wine_version == "11.12-v4":
             return {
-                "wine_url": "https://github.com/ryzendew/Affinity-Wine-Builder/releases/download/11.11/ElementalWarrior-wine-11.11-v4.tar.xz",
-                "wine_file_name": "ElementalWarrior-wine-11.11-v4.tar.xz",
+                "wine_url": "https://github.com/ryzendew/Affinity-Wine-Builder/releases/download/11.12/ElementalWarrior-wine-11.12-v4.tar.xz",
+                "wine_file_name": "ElementalWarrior-wine-11.12-v4.tar.xz",
                 "wine_dir_name": "ElementalWarriorWine",
-                "wine_dir_pattern": "ElementalWarrior-wine-11.11-v4*",
+                "wine_dir_pattern": "ElementalWarrior-wine-11.12-v4*",
                 "archive_format": "xz",
-                "wine_display_name": "Wine 11.11 v4 (AMD Zen 4/5 optimized)",
+                "wine_display_name": "Wine 11.12 v4 (AMD Zen 4/5 optimized)",
             }
-        else:  # Default to 11.11
+        else:  # Default to 11.12
             return {
-                "wine_url": "https://github.com/ryzendew/Affinity-Wine-Builder/releases/download/11.11/ElementalWarrior-wine-11.11.tar.xz",
-                "wine_file_name": "ElementalWarrior-wine-11.11.tar.xz",
+                "wine_url": "https://github.com/ryzendew/Affinity-Wine-Builder/releases/download/11.12/ElementalWarrior-wine-11.12.tar.xz",
+                "wine_file_name": "ElementalWarrior-wine-11.12.tar.xz",
                 "wine_dir_name": "ElementalWarriorWine",
-                "wine_dir_pattern": "ElementalWarrior-wine-11.11*",
+                "wine_dir_pattern": "ElementalWarrior-wine-11.12*",
                 "archive_format": "xz",
-                "wine_display_name": "Wine 11.11 (Latest - with AMD GPU and OpenCL patches)",
+                "wine_display_name": "Wine 11.12 (Latest - with AMD GPU and OpenCL patches)",
             }
 
     def _download_wine_to_cache(self, wine_version, cache_dir):
         """Download a Wine version to cache directory
 
         Args:
-            wine_version: "9.14", "10.10", or "11.11"
+            wine_version: "9.14", "10.10", or "11.12"
             cache_dir: Path to cache directory
 
         Returns:
@@ -10924,7 +10924,7 @@ class AffinityInstallerGUI(QMainWindow):
         cache_dir = Path(self.directory) / "Wine-Switch"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        all_versions = ["9.14", "10.10", "11.11", "11.11-v4"]
+        all_versions = ["9.14", "10.10", "11.12", "11.12-v4"]
 
         self.log(
             "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -11260,18 +11260,18 @@ class AffinityInstallerGUI(QMainWindow):
         wine_version = self.show_question_dialog(
             "Choose Wine Version",
             "Which Wine version would you like to install?\n\n"
-            "• Wine 11.11 (Recommended) - ElementalWarrior Wine 11.11 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance.\n"
-            "• Wine 11.11 v4 (Zen 4/5) - ElementalWarrior Wine 11.11 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs.\n"
+            "• Wine 11.12 (Recommended) - ElementalWarrior Wine 11.12 with AMD GPU and OpenCL patches. Latest version with best compatibility and performance.\n"
+            "• Wine 11.12 v4 (Zen 4/5) - ElementalWarrior Wine 11.12 v4 with AVX-512 and AMD Zen 4/5 optimizations. Best performance for Ryzen 7000/9000 series CPUs.\n"
             "• Wine 10.10 - ElementalWarrior Wine 10.10 with AMD GPU and OpenCL patches. Previous stable version.\n"
             "• Wine 9.14 (Legacy) - Legacy version with AMD GPU and OpenCL patches. Fallback option if you encounter issues with newer versions.\n\n"
             "Note: This will replace your current Wine installation.",
-            ["Wine 11.11 (Recommended)", "Wine 11.11 v4 (Zen 4/5)", "Wine 10.10", "Wine 9.14 (Legacy)"],
+            ["Wine 11.12 (Recommended)", "Wine 11.12 v4 (Zen 4/5)", "Wine 10.10", "Wine 9.14 (Legacy)"],
         )
 
-        if wine_version == "Wine 11.11 (Recommended)":
-            wine_version_choice = "11.11"
-        elif wine_version == "Wine 11.11 v4 (Zen 4/5)":
-            wine_version_choice = "11.11-v4"
+        if wine_version == "Wine 11.12 (Recommended)":
+            wine_version_choice = "11.12"
+        elif wine_version == "Wine 11.12 v4 (Zen 4/5)":
+            wine_version_choice = "11.12-v4"
         elif wine_version == "Wine 10.10":
             wine_version_choice = "10.10"
         elif wine_version == "Wine 9.14 (Legacy)":
@@ -12978,16 +12978,16 @@ Would you like to continue with {distro_name} anyway?"""
             #     installer_file.unlink()
             # self.log("Installer file removed", "success")
 
-            # Restore WinMetadata (only needed for Wine 9.14 and 10.10, not 11.11+)
+            # Restore WinMetadata (only needed for Wine 9.14 and 10.10, not 11.12+)
             wine_version = self.get_current_wine_version()
             if wine_version in ["9.14", "10.10"]:
                 self.restore_winmetadata()
             else:
                 self.log(
-                    "Skipping WinMetadata restore for Wine 11.11+ (not needed)", "info"
+                    "Skipping WinMetadata restore for Wine 11.12+ (not needed)", "info"
                 )
 
-            # Set up wintypes.dll and Wine overrides for Affinity apps (v2 and v3) - only for Wine < 11.11
+            # Set up wintypes.dll and Wine overrides for Affinity apps (v2 and v3) - only for Wine < 11.12
             if app_name in ["Photo", "Designer", "Publisher", "Add"]:
                 wine_version = self.get_current_wine_version()
                 if wine_version in ["9.14", "10.10"]:
@@ -12998,7 +12998,7 @@ Would you like to continue with {distro_name} anyway?"""
                     self.setup_wintypes_dll(app_name)
                 else:
                     self.log(
-                        "Skipping wintypes.dll setup for Wine 11.11+ (not needed)",
+                        "Skipping wintypes.dll setup for Wine 11.12+ (not needed)",
                         "info",
                     )
 
@@ -13526,7 +13526,7 @@ Would you like to continue with {distro_name} anyway?"""
                     "info",
                 )
 
-            # Restore WinMetadata (only needed for Wine 9.14 and 10.10, not 11.11+)
+            # Restore WinMetadata (only needed for Wine 9.14 and 10.10, not 11.12+)
             wine_version = self.get_current_wine_version()
             if wine_version in ["9.14", "10.10"]:
                 self.update_progress_text("Restoring Windows Metadata...")
@@ -13534,7 +13534,7 @@ Would you like to continue with {distro_name} anyway?"""
                 self.restore_winmetadata()
             else:
                 self.log(
-                    "Skipping WinMetadata restore for Wine 11.11+ (not needed)", "info"
+                    "Skipping WinMetadata restore for Wine 11.12+ (not needed)", "info"
                 )
 
             # Configure OpenCL (if enabled)
@@ -13545,7 +13545,7 @@ Would you like to continue with {distro_name} anyway?"""
             else:
                 self.log("OpenCL support is disabled, skipping configuration", "info")
 
-            # For Affinity v2 apps (Photo, Designer, Publisher), copy wintypes.dll and set override (only for Wine < 11.11)
+            # For Affinity v2 apps (Photo, Designer, Publisher), copy wintypes.dll and set override (only for Wine < 11.12)
             if is_affinity_v2:
                 wine_version = self.get_current_wine_version()
                 if wine_version in ["9.14", "10.10"]:
@@ -13554,11 +13554,11 @@ Would you like to continue with {distro_name} anyway?"""
                     self.setup_wintypes_dll(app_name)
                 else:
                     self.log(
-                        "Skipping wintypes.dll setup for Wine 11.11+ (not needed)",
+                        "Skipping wintypes.dll setup for Wine 11.12+ (not needed)",
                         "info",
                     )
 
-            # For Affinity v3 (Unified), copy wintypes.dll and set override, then patch the DLL (only for Wine < 11.11)
+            # For Affinity v3 (Unified), copy wintypes.dll and set override, then patch the DLL (only for Wine < 11.12)
             if app_name == "Add" or app_name == "Affinity (Unified)":
                 wine_version = self.get_current_wine_version()
                 if wine_version in ["9.14", "10.10"]:
@@ -13568,7 +13568,7 @@ Would you like to continue with {distro_name} anyway?"""
                     self.setup_wintypes_dll(app_name)
                 else:
                     self.log(
-                        "Skipping wintypes.dll setup for Wine 11.11+ (not needed)",
+                        "Skipping wintypes.dll setup for Wine 11.12+ (not needed)",
                         "info",
                     )
 

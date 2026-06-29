@@ -4,8 +4,8 @@ The installer supports multiple Wine versions, all patched for Affinity compatib
 
 | Version | Best For | Description |
 |---------|----------|-------------|
-| **11.11 v4** (Zen 4/5) | Ryzen 7000/9000 | v4 build with AVX-512 and Zen 4/5 optimizations for maximum performance |
-|**11.11** (Latest) | Most users | Latest version with best compatibility and performance |
+| **11.12 v4** (Zen 4/5) | Ryzen 7000/9000 | v4 build with AVX-512 and Zen 4/5 optimizations for maximum performance |
+|**11.12** (Latest) | Most users | Latest version with best compatibility and performance |
 | **10.10** (Legacy) | Most users | Latest version with best compatibility and performance |
 | **9.14** (Legacy) | Fallback | Legacy version if newer versions have issues |
 
