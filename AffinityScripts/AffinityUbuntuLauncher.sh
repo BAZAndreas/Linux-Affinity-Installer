@@ -44,8 +44,12 @@ PREFIX="${AFFINITY_PREFIX:-$HOME/.AffinityLinux}"
 APP_EXE="${AFFINITY_EXE:-$PREFIX/drive_c/Program Files/Affinity/Affinity/Affinity.exe}"
 ICON_PATH="${AFFINITY_ICON:-$HOME/.local/share/icons/Affinity.svg}"
 DESKTOP_FILE="${AFFINITY_DESKTOP_FILE:-$HOME/.local/share/applications/Affinity.desktop}"
-STARTUP_TIMEOUT="${AFFINITY_STARTUP_TIMEOUT:-25}"
-AFFINITY_MAIN_WINDOW_PATTERN='"Affinity": ("affinity.exe" "affinity.exe")'
+# A cold start (first launch, or after a reboot) regularly takes 30 to 60s, and when this
+# timeout expires the launcher moves the v3 profile aside and relaunches. 25s was too short.
+STARTUP_TIMEOUT="${AFFINITY_STARTUP_TIMEOUT:-180}"
+# Extended regex. With AffinityPluginLoader installed the real process is Affinity.real.exe,
+# so its main window is owned by affinity.real.exe rather than affinity.exe.
+AFFINITY_MAIN_WINDOW_PATTERN='"Affinity": \("affinity(\.real)?\.exe"'
 
 get_affinity_user_data_dir() {
     local username
@@ -56,7 +60,9 @@ get_affinity_user_data_dir() {
 
 find_wine_binary() {
     local candidate
+    # AFFINITY_WINE lets the prefix live somewhere other than the Wine build.
     for candidate in \
+        "${AFFINITY_WINE:-}" \
         "$PREFIX/ElementalWarriorWine/bin/wine" \
         "$PREFIX/ElementalWarrior-wine-10.10/bin/wine" \
         "$PREFIX/ElementalWarrior-wine-11.0/bin/wine"; do
@@ -130,7 +136,7 @@ has_visible_affinity_window() {
     fi
 
     DISPLAY="${DISPLAY:-:0}" xwininfo -root -children -all 2>/dev/null |
-        grep -F "$AFFINITY_MAIN_WINDOW_PATTERN" >/dev/null 2>&1
+        grep -E "$AFFINITY_MAIN_WINDOW_PATTERN" >/dev/null 2>&1
 }
 
 wait_for_affinity_window() {
@@ -213,19 +219,26 @@ setup_runtime_env() {
         export XAUTHORITY
     fi
 
-    export __NV_PRIME_RENDER_OFFLOAD=1
-    export __GLX_VENDOR_LIBRARY_NAME='nvidia'
-    export __VK_LAYER_NV_optimus='NVIDIA_only'
+    # Only steer rendering to NVIDIA when its driver is actually loaded. On hybrid laptops
+    # booted iGPU-only, or AMD/Intel-only machines, forcing NVIDIA_only breaks Vulkan.
+    # AFFINITY_GPU=default skips this even when the NVIDIA driver is present.
+    if [ -d /proc/driver/nvidia ] && [ "${AFFINITY_GPU:-}" != "default" ]; then
+        export __NV_PRIME_RENDER_OFFLOAD=1
+        export __GLX_VENDOR_LIBRARY_NAME='nvidia'
+        export __VK_LAYER_NV_optimus='NVIDIA_only'
 
-    if NVIDIA_PCI_ID="$(detect_nvidia_pci_id)"; then
-        export MESA_VK_DEVICE_SELECT="$NVIDIA_PCI_ID"
-        export MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE=1
-    else
-        log_warn "NVIDIA PCI-ID konnte nicht automatisch erkannt werden; Vulkan Device Select bleibt unverändert."
+        if NVIDIA_PCI_ID="$(detect_nvidia_pci_id)"; then
+            export MESA_VK_DEVICE_SELECT="$NVIDIA_PCI_ID"
+            export MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE=1
+        else
+            log_warn "NVIDIA PCI-ID konnte nicht automatisch erkannt werden; Vulkan Device Select bleibt unverändert."
+        fi
     fi
 
     export DXVK_ASYNC=0
-    export DXVK_CONFIG='d3d9.deferSurfaceCreation = True; d3d9.shaderModel = 1'
+    # Do not cap d3d9.shaderModel at 1: when DXVK provides d3d9, WPF (the Affinity UI)
+    # needs shader model 2 or higher for hardware rendering and the UI becomes sluggish.
+    export DXVK_CONFIG='d3d9.deferSurfaceCreation = True'
     export DXVK_LOG_LEVEL='none'
     export VKD3D_DEBUG='none'
     export VKD3D_CONFIG=''

@@ -10306,22 +10306,20 @@ class AffinityInstallerGUI(QMainWindow):
         )
         self.update_progress(current_step / total_steps)
         self.log("Installing remaining dependencies...", "info")
+        # apt aborts the whole transaction if any requested package does not exist.
+        # Ubuntu 26.04 no longer ships p7zip-full (7zip provides the 7z command)
+        # or dotnet-sdk-8.0, so only request what this release actually has.
+        remaining_packages = ["winetricks", "wget", "curl", "tar", "jq", "zstd"]
+        remaining_packages.append(
+            "p7zip-full" if self._apt_package_available("p7zip-full") else "7zip"
+        )
+        remaining_packages += [
+            pkg
+            for pkg in ("dotnet-sdk-8.0", "dotnet-sdk-10.0")
+            if self._apt_package_available(pkg)
+        ]
         success, _, _ = self.run_command(
-            [
-                "sudo",
-                "apt",
-                "install",
-                "-y",
-                "winetricks",
-                "wget",
-                "curl",
-                "p7zip-full",
-                "tar",
-                "jq",
-                "zstd",
-                "dotnet-sdk-8.0",
-                "dotnet-sdk-10.0",
-            ]
+            ["sudo", "apt", "install", "-y"] + remaining_packages
         )
         if not success:
             self.log("Failed to install remaining dependencies", "error")
@@ -10335,6 +10333,19 @@ class AffinityInstallerGUI(QMainWindow):
         self.update_progress_text(f"{distro_name} dependencies installed")
         self.log(f"All dependencies installed for {distro_name}", "success")
         return True
+
+    def _apt_package_available(self, package):
+        """Return True if apt has an install candidate for the package."""
+        success, stdout, _ = self.run_command(
+            ["apt-cache", "policy", package], check=False, capture=True
+        )
+        if not success or not stdout:
+            return False
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line.startswith("Candidate:"):
+                return line.split(":", 1)[1].strip() not in ("", "(none)")
+        return False
 
     def get_preferred_ubuntu_winehq_version(self, codename):
         """Return the preferred WineHQ package version for Ubuntu-family systems"""
