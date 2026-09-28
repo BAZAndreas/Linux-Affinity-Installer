@@ -35,7 +35,7 @@ A slower alternative is to force WPF software rendering:
 ```bash
 WINEPREFIX="$HOME/.AffinityLinux" wine reg add 'HKCU\Software\Microsoft\Avalon.Graphics' /v DisableHWAcceleration /t REG_DWORD /d 1 /f
 ```
-When DXVK provides d3d9, do not set `d3d9.shaderModel = 1` in `DXVK_CONFIG`. WPF needs shader model 2 or higher for hardware rendering, and the UI becomes sluggish without it.
+When DXVK provides d3d9, leave `DXVK_CONFIG` unset. `d3d9.deferSurfaceCreation = True` makes new windows such as Welcome and Settings render white (reproduced every time with it set, never with it unset), and `d3d9.shaderModel = 1` drops WPF below shader model 2, which makes the UI sluggish.
 
 ### Window Management Issues (Moving UI Elements Causes Crashes)
 **Issue:** Moving or undocking any part of the Affinity UI causes the application to crash. Windows cannot be docked properly and undocked windows are unreliable.

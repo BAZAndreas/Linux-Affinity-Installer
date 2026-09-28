@@ -236,9 +236,10 @@ setup_runtime_env() {
     fi
 
     export DXVK_ASYNC=0
-    # Do not cap d3d9.shaderModel at 1: when DXVK provides d3d9, WPF (the Affinity UI)
-    # needs shader model 2 or higher for hardware rendering and the UI becomes sluggish.
-    export DXVK_CONFIG='d3d9.deferSurfaceCreation = True'
+    # No DXVK_CONFIG when DXVK provides d3d9 for WPF (the Affinity UI):
+    # d3d9.deferSurfaceCreation makes new windows (Welcome, Settings) render white, and
+    # d3d9.shaderModel = 1 drops WPF below shader model 2 so the UI becomes sluggish.
+    unset DXVK_CONFIG
     export DXVK_LOG_LEVEL='none'
     export VKD3D_DEBUG='none'
     export VKD3D_CONFIG=''
