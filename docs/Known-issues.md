@@ -14,6 +14,29 @@ This document lists known issues and their workarounds. For the latest updates, 
 - Check GPU drivers are up to date
 - Use vkd3d-proton or DXVK instead of OpenCL (see [Hardware Acceleration](HARDWARE-ACCELERATION.md))
 
+### Startup Crash in Font Layout (Tahoma)
+**Issue:** Affinity v3 exits during startup, or shortly after the window appears, with `System.Environment.FailFast` ("Unrecoverable system error") raised from `MS.Internal.Shaping.TypefaceMap.MapUnresolvedCharacters`. The exit code is `-2146232797`.
+
+**Cause:** The native Tahoma font installed by the winetricks `tahoma` verb. The bundled Wine build already ships its own Tahoma.
+
+**Workaround:** Build the prefix without the `tahoma` verb. On Ubuntu 26.04 (RTX 3070 laptop), moving the Tahoma files out of `drive_c/windows/Fonts` let an existing prefix start, but it still crashed intermittently with the same stack. A clean prefix built with only `remove_mono vcrun2022 dotnet48 corefonts win11` has not shown the crash across dozens of launches.
+
+### White or Blank Welcome Window
+**Issue:** The main window renders correctly, but the Welcome (Home) window is white, showing only a plain "Home" button and sometimes the tutorial cards. New dialogs can also flash white before drawing.
+
+**Cause:** The Direct3D 9 path that WPF (the Affinity UI toolkit) uses. The bundled Wine build uses the wined3d Vulkan renderer for d3d9, and the Welcome window, which is a transparent layered window, does not render through it. Ruled out by testing: the GPU (same result on AMD and NVIDIA), the Windows theme, DPI, the Affinity profile, launcher environment variables, and network access.
+
+**Workaround:** Use DXVK for d3d9 only. Copy `x64/d3d9.dll` from a [DXVK release](https://github.com/doitsujin/dxvk/releases) into the Affinity install folder and add the override `d3d9=n,b`:
+```bash
+cp dxvk-*/x64/d3d9.dll "$HOME/.AffinityLinux/drive_c/Program Files/Affinity/Affinity/"
+WINEDLLOVERRIDES="d3d9=n,b" wine "$HOME/.AffinityLinux/drive_c/Program Files/Affinity/Affinity/Affinity.exe"
+```
+A slower alternative is to force WPF software rendering:
+```bash
+WINEPREFIX="$HOME/.AffinityLinux" wine reg add 'HKCU\Software\Microsoft\Avalon.Graphics' /v DisableHWAcceleration /t REG_DWORD /d 1 /f
+```
+When DXVK provides d3d9, leave `DXVK_CONFIG` unset. `d3d9.deferSurfaceCreation = True` makes new windows such as Welcome and Settings render white (reproduced every time with it set, never with it unset), and `d3d9.shaderModel = 1` drops WPF below shader model 2, which makes the UI sluggish.
+
 ### Window Management Issues (Moving UI Elements Causes Crashes)
 **Issue:** Moving or undocking any part of the Affinity UI causes the application to crash. Windows cannot be docked properly and undocked windows are unreliable.
 
@@ -36,6 +59,21 @@ This document lists known issues and their workarounds. For the latest updates, 
 - Save work frequently due to potential crashes
 
 ## Installation Issues
+
+### Affinity Installer (SetupUI.exe) Crashes
+**Issue:** The Affinity v3 setup program crashes under Wine with `Value cannot be null. Parameter name: icon` in `SetupUI.Util.GetShieldIcon`.
+
+**Workaround:** Canva also distributes Affinity as `Affinity x64.msix`, which is a zip archive. Extract its `App/` folder into the install location instead of running the setup program:
+```bash
+D="$HOME/.AffinityLinux/drive_c/Program Files/Affinity/Affinity"
+mkdir -p "$D" && cd "$D"
+unzip -q "$HOME/Downloads/Affinity x64.msix" 'App/*' && cp -a App/. . && rm -rf App
+```
+
+### Ubuntu 26.04: Dependency Installation Fails
+**Issue:** The dependency step fails because Ubuntu 26.04 no longer has `p7zip-full` or `dotnet-sdk-8.0`, and apt aborts the whole install when one requested package is missing.
+
+**Status:** Fixed. The installer now requests `7zip` when `p7zip-full` is unavailable, and only the .NET SDK versions that apt can actually install.
 
 ### GLIBC Version Error
 **Issue:** `wine: could not load ntdll.so: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.38' not found`
@@ -95,6 +133,19 @@ This document lists known issues and their workarounds. For the latest updates, 
 
 ## Application Features
 
+### Ubuntu Snapshot Launcher Resets the Profile or Forces NVIDIA
+**Issue:** `AffinityUbuntuLauncher.sh` moved the v3 profile to `3.0.backup-*` and relaunched whenever startup took longer than 25 seconds, which is normal on a cold start. With AffinityPluginLoader installed it also never detected the main window, because the window belongs to `affinity.real.exe`. On hybrid laptops booted with the NVIDIA driver unloaded, it still forced NVIDIA-only Vulkan.
+
+**Status:** Fixed. The startup timeout is now 180 seconds (`AFFINITY_STARTUP_TIMEOUT` overrides it), window detection matches both `affinity.exe` and `affinity.real.exe`, and NVIDIA offload is only applied when `/proc/driver/nvidia` exists (`AFFINITY_GPU=default` skips it). `AFFINITY_WINE` can point the launcher at a Wine build outside the prefix.
+
+### UI Is Tiny With Fractional Scaling (GNOME Wayland)
+**Issue:** At 125% or 133% scaling with Xwayland native scaling enabled, Wine windows get a 2x canvas and the Affinity UI renders at half size.
+
+**Workaround:** Use the installer's "Set DPI Scaling" button, or set the DPI to 192 directly:
+```bash
+WINEPREFIX="$HOME/.AffinityLinux" wine reg add 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d 192 /f
+```
+
 ### Microsoft Edge WebView2 Runtime Not Working
 **Issue:** The Microsoft Edge WebView2 Runtime is broken and does not work properly in Wine. This affects features in Affinity v3 that rely on WebView2, such as the Help system and some web-based dialogs.
 
@@ -151,6 +202,13 @@ Unhandled Exception: System.IO.FileNotFoundException: Could not load file or ass
 Cause: stock Wine's `RoResolveNamespace` implementation (the built-in `wintypes` module, or the external `wintypes_shim.dll` some guides recommend) always resolves every WinRT namespace request to a single merged `Windows.winmd` file from the `windows-rs` project. That file doesn't fully implement `Windows.Services.Store`, which Publisher queries at startup for its store-license check. Photo and Designer don't hit this code path, so they can appear to work fine under stock Wine — which makes this limitation easy to miss until someone specifically tries Publisher.
 
 Note: this is why this project uses the ElementalWarrior Wine fork instead of stock Wine — it resolves WinRT namespaces against the full `WinMetadata` folder rather than a single merged file. Anyone trying to reproduce Publisher support with a plain/staging Wine build outside this installer will hit this wall regardless of installer file (`.exe` vs `.msix`), dependency install order, or DLL overrides.
+
+### Running a Prefix With a Different Wine Build
+**Issue:** After launching a prefix even once with a different Wine build (for example the distribution's WineHQ package instead of the bundled ElementalWarrior build), Affinity may stop reaching its main window.
+
+**Cause:** Wine updates the prefix in place the first time a different build uses it.
+
+**Workaround:** Use one Wine build per prefix. If it already happened, recreate the prefix.
 
 ## Feature Requests
 
