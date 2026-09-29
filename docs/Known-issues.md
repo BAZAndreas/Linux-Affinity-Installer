@@ -21,6 +21,18 @@ This document lists known issues and their workarounds. For the latest updates, 
 
 **Workaround:** Build the prefix without the `tahoma` verb. On Ubuntu 26.04 (RTX 3070 laptop), moving the Tahoma files out of `drive_c/windows/Fonts` let an existing prefix start, but it still crashed intermittently with the same stack. A clean prefix built with only `remove_mono vcrun2022 dotnet48 corefonts win11` has not shown the crash across dozens of launches.
 
+### AppImage 3.2.0 Crashes at Launch (UriFormatException)
+**Issue:** The 3.2.0 AppImage sets up the prefix and then exits before any window appears with `System.UriFormatException: Invalid URI: The format of the URI could not be determined.`, raised from `MS.Internal.FontCache.Util.CombineUriWithFaceIndex` via `System.Windows.Media.Typeface.get_Symbol()`.
+
+**Status:** Open ([Discussion #173](https://github.com/ryzendew/Linux-Affinity-Installer/discussions/173))
+
+**Cause:** The AppImage copies its bundled prefix into `~/.affinity-appimage-wineprefix` and skips every drive letter except `c:`, including `z:`. Wine only creates `z:` for a new prefix, so the copied prefix never gets one. Without `z:`, Wine passes font paths to WPF as `\??\unix\...`, which WPF cannot parse as a URI. This includes the `Symbol` font bundled with the AppImage itself, so hiding system fonts through fontconfig does not reliably help.
+
+**Workaround:** Create the missing `z:` drive and start the AppImage again. Wine then registers the fonts with `Z:\` paths:
+```bash
+ln -s / "$HOME/.affinity-appimage-wineprefix/dosdevices/z:"
+```
+
 ### White or Blank Welcome Window
 **Issue:** The main window renders correctly, but the Welcome (Home) window is white, showing only a plain "Home" button and sometimes the tutorial cards. New dialogs can also flash white before drawing.
 
