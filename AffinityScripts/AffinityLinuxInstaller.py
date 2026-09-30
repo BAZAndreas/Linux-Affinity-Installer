@@ -17,6 +17,7 @@ import urllib.request
 import urllib.error
 import re
 import json
+import hashlib
 import tempfile
 from pathlib import Path
 import time
@@ -292,6 +293,13 @@ class ProgressSpinner(QWidget):
 
 
 class AffinityInstallerGUI(QMainWindow):
+    AFFINITY_URL_HANDLER = "affinity-url-handler.desktop"
+    # .NET Framework WinRT facades copied from the .NET 4.8 offline installer (SHA-256).
+    WINRT_FACADES = {
+        "System.Runtime.WindowsRuntime": "1e1e6b4ac4e758fe1066e315f7928c393e1216dbe55c318803dd107123e1a8e3",
+        "System.Runtime.WindowsRuntime.UI.Xaml": "8e035a8667213e5a87b69757251a00c7c5f72c5b1b8f7578ec20688629b189e1",
+    }
+
     log_signal = pyqtSignal(str, str)
     progress_signal = pyqtSignal(float)
     progress_text_signal = pyqtSignal(str)
@@ -2918,6 +2926,12 @@ class AffinityInstallerGUI(QMainWindow):
                     self.reinstall_winmetadata,
                     "Fix corrupted Windows metadata files",
                     "loop",
+                ),
+                (
+                    "Fix Canva Sign-in (v3)",
+                    self.fix_canva_sign_in,
+                    "Install the .NET WinRT facades and the affinity:// handler the Canva sign-in needs",
+                    "wrench",
                 ),
                 (
                     "WebView2 Runtime (v3)",
@@ -7719,6 +7733,7 @@ class AffinityInstallerGUI(QMainWindow):
 
             # Update button text
             self.update_switch_backend_button()
+            self.create_affinity_url_handler()
 
             self.show_message(
                 "Switch to VKD3D Complete",
@@ -7971,6 +7986,7 @@ class AffinityInstallerGUI(QMainWindow):
 
             # Update button text
             self.update_switch_backend_button()
+            self.create_affinity_url_handler()
 
             self.show_message(
                 "Switch to DXVK Complete",
@@ -8086,6 +8102,9 @@ class AffinityInstallerGUI(QMainWindow):
             )
         else:
             self.log("No desktop entries found to update", "info")
+
+        # The affinity:// handler reuses the Exec= line of Affinity.desktop.
+        self.create_affinity_url_handler()
 
     def format_distro_name(self, distro=None):
         """Format distribution name for display with proper capitalization"""
@@ -11083,6 +11102,39 @@ class AffinityInstallerGUI(QMainWindow):
         except Exception as e:
             self.log(f"Failed to install WinMetadata: {e}", "error")
 
+    def fix_canva_sign_in(self):
+        """Install what the Canva sign-in callback needs in an existing Affinity v3 prefix"""
+        if not self.affinity_v3_exe_path().exists():
+            QMessageBox.warning(self, "Affinity Not Found", f"Affinity v3 is not installed:\n{self.affinity_v3_exe_path()}")
+            return
+        wine_support = self.canva_sign_in_wine_support()
+        if wine_support == "unknown":
+            QMessageBox.warning(self, "Wine Not Found", "Could not run the Wine of this prefix.")
+            return
+        if wine_support == "unsupported":
+            self.remove_affinity_url_handler()
+            QMessageBox.information(
+                self,
+                "Wine Version Not Supported",
+                "The Canva sign-in fix supports Wine 9.14 and 10.10.\n\n"
+                "With Wine 11.12 the sign-in also needs the Windows WinMetadata and wintypes.dll, "
+                "which this installer only sets up for Wine 9.14 and 10.10.",
+            )
+            return
+        self.start_operation("Fix Canva Sign-in")
+        threading.Thread(target=self._fix_canva_sign_in_entry, daemon=True).start()
+
+    def _fix_canva_sign_in_entry(self):
+        """Wrapper: install the WinRT facades and the affinity:// handler, then end the operation."""
+        try:
+            facades_installed = self.install_windowsruntime_facades()
+            if self.create_affinity_url_handler() and facades_installed:
+                self.log("\n✓ Canva sign-in fix installed", "success")
+            else:
+                self.log("\n✗ Canva sign-in fix not installed, see the messages above", "error")
+        finally:
+            self.end_operation()
+
     def reinstall_winmetadata(self):
         """Remove old WinMetadata folder and reinstall fresh"""
         self.log(
@@ -11157,6 +11209,10 @@ class AffinityInstallerGUI(QMainWindow):
                 "Skipping WinMetadata and wintypes.dll setup for Wine 11.12+ (not needed)",
                 "info",
             )
+
+        if self.affinity_v3_exe_path().exists():
+            self.install_windowsruntime_facades()
+            self.create_affinity_url_handler()
 
         self.log("\n✓ WinMetadata reinstallation completed!", "success")
 
@@ -14119,6 +14175,10 @@ Would you like to continue with {distro_name} anyway?"""
                     "Skipping WinMetadata restore for Wine 11.12+ (not needed)", "info"
                 )
 
+            if app_name == "Add" and self.affinity_v3_exe_path().exists():
+                self.install_windowsruntime_facades()
+                self.create_affinity_url_handler()
+
             # Set up wintypes.dll and Wine overrides for Affinity apps (v2 and v3) - only for Wine < 11.12
             if app_name in ["Photo", "Designer", "Publisher", "Add"]:
                 wine_version = self.get_current_wine_version()
@@ -14549,6 +14609,10 @@ Would you like to continue with {distro_name} anyway?"""
                         "warning",
                     )
 
+                if self.affinity_v3_exe_path().exists():
+                    self.install_windowsruntime_facades()
+                    self.create_affinity_url_handler()
+
             self.update_progress(1.0)
             self.update_progress_text("Update complete!")
             self.log(f"\n✓ {display_name} update completed!", "success")
@@ -14682,6 +14746,9 @@ Would you like to continue with {distro_name} anyway?"""
                 self.log(
                     "Skipping WinMetadata restore for Wine 11.12+ (not needed)", "info"
                 )
+
+            if app_name == "Add" and self.affinity_v3_exe_path().exists():
+                self.install_windowsruntime_facades()
 
             # Configure OpenCL (if enabled)
             if self.is_opencl_enabled():
@@ -14996,6 +15063,172 @@ Would you like to continue with {distro_name} anyway?"""
             self.log("WinMetadata restored", "success")
         except Exception as e:
             self.log(f"Failed to restore WinMetadata: {e}", "warning")
+
+    def affinity_v3_exe_path(self):
+        """Return the path of the Affinity v3 (Unified) executable in the prefix"""
+        return Path(self.directory) / "drive_c" / "Program Files" / "Affinity" / "Affinity" / "Affinity.exe"
+
+    def get_winetricks_cache_dir(self):
+        """Return the winetricks download cache, resolved the same way winetricks does"""
+        if os.environ.get("W_CACHE"):
+            return Path(os.environ["W_CACHE"])
+        if os.environ.get("WINETRICKS_DIR"):
+            return Path(os.environ["WINETRICKS_DIR"]) / "cache"
+        xdg_cache = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+        return Path(xdg_cache) / "winetricks"
+
+    def _download_dotnet48_installer(self, installer, url, sha256):
+        """Download the .NET 4.8 offline installer into the winetricks cache and verify it"""
+
+        def matches(path):
+            digest = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest() == sha256
+
+        if installer.exists():
+            if matches(installer):
+                return True
+            # Same recovery as winetricks: keep the bad file aside and download again.
+            os.replace(installer, installer.with_name(installer.name + ".bak"))
+            self.log(f"Checksum mismatch for {installer.name}, downloading it again", "warning")
+
+        installer.parent.mkdir(parents=True, exist_ok=True)
+        partial = installer.with_name(installer.name + ".part")
+        try:
+            if not self.download_file(url, str(partial), ".NET Framework 4.8 offline installer"):
+                return False
+            if not matches(partial):
+                self.log(f"Checksum mismatch for the downloaded {installer.name}", "warning")
+                return False
+            os.replace(partial, installer)
+            return True
+        finally:
+            if partial.exists():
+                partial.unlink()
+
+    def windowsruntime_facade_paths(self):
+        """Return the GAC path of each WinRT facade in the prefix"""
+        gac_dir = (
+            Path(self.directory) / "drive_c" / "windows" / "Microsoft.NET" / "assembly" / "GAC_MSIL"
+        )
+        return {
+            name: gac_dir / name / "v4.0_4.0.0.0__b77a5c561934e089" / f"{name}.dll"
+            for name in self.WINRT_FACADES
+        }
+
+    def windowsruntime_facades_installed(self):
+        """Return True when both WinRT facades are in the prefix GAC"""
+        try:
+            return all(path.exists() for path in self.windowsruntime_facade_paths().values())
+        except OSError:
+            return False
+
+    def canva_sign_in_wine_support(self):
+        """Return "supported", "unsupported" or "unknown" for the prefix's Wine.
+
+        The Canva sign-in fix supports Wine 9.x and 10.x (the installer's 9.14 and 10.10).
+        With Wine 11.12 the callback method also needs the Windows WinMetadata and the
+        native wintypes.dll, which this installer only sets up for Wine 9.14 and 10.10.
+        "unknown" means the prefix's Wine could not be run.
+        """
+        wine = self.get_wine_path("wine")
+        if not wine.exists():
+            return "unknown"
+        success, stdout, _ = self._run_uncancellable([str(wine), "--version"])
+        match = re.search(r"wine-(\d+)\.", stdout) if success else None
+        if not match:
+            return "unknown"
+        return "supported" if match.group(1) in ("9", "10") else "unsupported"
+
+    def install_windowsruntime_facades(self):
+        """Install the .NET Framework WinRT facades that `winetricks dotnet48` leaves out.
+
+        Affinity handles the affinity:// callback of the Canva sign-in in
+        Serif.Affinity.Application.ProcessCommandLineArguments. The CLR cannot JIT that
+        method without System.Runtime.WindowsRuntime, and also needs WinMetadata. The
+        .NET 4.8 offline installer only carries these facades inside its Windows 8+
+        servicing packages, which are not installed under Wine, so they are copied into the GAC.
+        """
+        installer_name = "ndp48-x86-x64-allos-enu.exe"
+        installer_url = (
+            "https://download.visualstudio.microsoft.com/download/pr/"
+            "7afca223-55d2-470a-8edc-6a1739ae3252/abd170b4b0ec15ad0222a809b761a036/"
+            + installer_name
+        )
+        installer_sha256 = "95889d6de3f2070c07790ad6cf2000d33d9a1bdfc6a381725ab82ab1c314fd53"
+        cab_name = "x64-Windows10.0-KB4486153-x64.cab"
+        temp_prefix = ".winrt-facades-"
+
+        for stale in Path(self.directory).glob(temp_prefix + "*"):
+            shutil.rmtree(stale, ignore_errors=True)
+
+        targets = self.windowsruntime_facade_paths()
+        if self.windowsruntime_facades_installed():
+            return True
+
+        wine_support = self.canva_sign_in_wine_support()
+        if wine_support == "unknown":
+            self.log("Could not run the prefix's Wine, skipping the WinRT facades", "warning")
+            return False
+        if wine_support == "unsupported":
+            self.log("Skipping the WinRT facades: the Canva sign-in fix supports Wine 9.14 and 10.10", "info")
+            return False
+        if not self.has_dotnet48_runtime():
+            self.log(".NET Framework 4.8 is not installed in the prefix, skipping the WinRT facades", "warning")
+            return False
+        if not self.check_command("7z"):
+            self.log("7z not found, skipping the WinRT facades needed for Canva sign-in", "warning")
+            return False
+
+        self.update_progress_text("Installing WinRT facades for .NET 4.8...")
+        self.log("Installing WinRT facades for .NET 4.8 (Canva sign-in)...", "info")
+        installer = self.get_winetricks_cache_dir() / "dotnet48" / installer_name
+        try:
+            if not self._download_dotnet48_installer(installer, installer_url, installer_sha256):
+                self.log("Could not get the .NET Framework 4.8 offline installer", "warning")
+                return False
+
+            # The prefix is on disk; /tmp may be RAM-backed and the cab is about 350 MB.
+            with tempfile.TemporaryDirectory(prefix=temp_prefix, dir=self.directory) as temp_dir:
+                temp_path = Path(temp_dir)
+                # 7z exits with 1 on warnings, so the extracted files decide success.
+                _, stdout, stderr = self.run_command(
+                    ["7z", "e", "-y", f"-o{temp_path}", str(installer), cab_name], check=False
+                )
+                cab_path = temp_path / cab_name
+                if not cab_path.exists():
+                    self.log(f"Could not extract {cab_name}: {(stdout + stderr).strip()}", "warning")
+                    return False
+
+                dll_dir = temp_path / "dll"
+                patterns = [f"msil_{name.lower()}_b77a5c561934e089_*/*" for name in self.WINRT_FACADES]
+                _, stdout, stderr = self.run_command(
+                    ["7z", "e", "-y", f"-o{dll_dir}", str(cab_path)] + patterns, check=False
+                )
+                if self.cancel_event.is_set():
+                    return False
+
+                for name, target in targets.items():
+                    source = dll_dir / f"{name.lower()}.dll"
+                    if not source.exists():
+                        self.log(f"{source.name} not found in {cab_name}: {(stdout + stderr).strip()}", "warning")
+                        return False
+                    with open(source, "rb") as f:
+                        if hashlib.sha256(f.read()).hexdigest() != self.WINRT_FACADES[name]:
+                            self.log(f"Unexpected checksum for {source.name}, skipping the WinRT facades", "warning")
+                            return False
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    staged = target.with_name(target.name + ".tmp")
+                    shutil.copy2(source, staged)
+                    os.replace(staged, target)
+
+            self.log("WinRT facades for .NET 4.8 installed", "success")
+            return True
+        except Exception as e:
+            self.log(f"Failed to install the WinRT facades: {e}", "warning")
+            return False
 
     def is_opencl_enabled(self):
         """Check if OpenCL is enabled"""
@@ -16495,6 +16728,234 @@ Would you like to continue with {distro_name} anyway?"""
         # Run the settings patcher
         return self.run_affinity_patcher(str(dll_path))
 
+    def _mimeapps_path(self):
+        return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mimeapps.list"
+
+    def _run_uncancellable(self, command):
+        """Run a short command (xdg-mime, update-desktop-database, wine --version).
+
+        It does not use run_command, which returns early while an earlier operation's
+        cancel flag is still set.
+        """
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+            return result.returncode == 0, result.stdout, result.stderr
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, "", str(e)
+
+    @staticmethod
+    def _mimeapps_key(line):
+        """Return the key of a mimeapps.list entry line, or None"""
+        key, sep, _ = line.partition("=")
+        return key.strip() if sep else None
+
+    def get_default_url_handler(self, scheme):
+        """Return the desktop file set as default for a URL scheme, or None"""
+        mime_type = f"x-scheme-handler/{scheme}"
+        if self.check_command("xdg-mime"):
+            success, stdout, _ = self._run_uncancellable(["xdg-mime", "query", "default", mime_type])
+            if success:
+                return stdout.strip() or None
+        try:
+            section = None
+            for line in self._mimeapps_path().read_text(encoding="utf-8-sig").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    section = stripped
+                elif section == "[Default Applications]" and self._mimeapps_key(stripped) == mime_type:
+                    return stripped.partition("=")[2].split(";")[0].strip() or None
+        except (OSError, UnicodeError):
+            pass
+        return None
+
+    def _write_mimeapps_default(self, mime_type, desktop_name, remove=None):
+        """Put desktop_name first in one [Default Applications] entry, or drop `remove` from it.
+
+        Other desktop files listed in that entry and the rest of the file are kept.
+        """
+        mimeapps = self._mimeapps_path()
+        try:
+            if not mimeapps.exists():
+                if not desktop_name:
+                    return True
+                raw = ""
+            else:
+                raw = mimeapps.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as e:
+            self.log(f"Could not read {mimeapps}: {e}", "warning")
+            return False
+        bom = raw.startswith("﻿")
+        lines = raw.lstrip("﻿").splitlines()
+
+        # Desktop files already listed for mime_type in [Default Applications].
+        section, listed = None, []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("["):
+                section = stripped
+            elif section == "[Default Applications]" and self._mimeapps_key(stripped) == mime_type:
+                listed += [name.strip() for name in stripped.partition("=")[2].split(";") if name.strip()]
+        dropped = {desktop_name, remove} - {None}
+        values = ([desktop_name] if desktop_name else []) + [
+            name for i, name in enumerate(listed) if name not in dropped and name not in listed[:i]
+        ]
+        entry = f"{mime_type}={';'.join(values)};" if values else None
+
+        output, section, written, in_defaults_seen = [], None, False, False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("["):
+                if section == "[Default Applications]" and entry and not written:
+                    output.append(entry)
+                    written = True
+                section = stripped
+                in_defaults_seen = in_defaults_seen or section == "[Default Applications]"
+            elif section == "[Default Applications]" and self._mimeapps_key(stripped) == mime_type:
+                if entry and not written:
+                    output.append(entry)
+                    written = True
+                continue
+            output.append(line)
+        if entry and not written:
+            if not in_defaults_seen or section != "[Default Applications]":
+                output.append("[Default Applications]")
+            output.append(entry)
+
+        try:
+            target = mimeapps.resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            staged = target.with_name(target.name + ".tmp")
+            staged.write_text(("﻿" if bom else "") + "\n".join(output) + "\n", encoding="utf-8")
+            if target.exists():
+                shutil.copymode(target, staged)
+            os.replace(staged, target)
+            return True
+        except (OSError, RuntimeError) as e:
+            self.log(f"Could not update {mimeapps}: {e}", "warning")
+            return False
+
+    def _set_default_url_handler(self, scheme, desktop_name):
+        """Set the default handler for a URL scheme"""
+        mime_type = f"x-scheme-handler/{scheme}"
+        if self.check_command("xdg-mime"):
+            success, _, stderr = self._run_uncancellable(["xdg-mime", "default", desktop_name, mime_type])
+            if success:
+                return True
+            self.log(f"xdg-mime failed ({stderr.strip()}), editing mimeapps.list directly", "warning")
+        return self._write_mimeapps_default(mime_type, desktop_name)
+
+    def _affinity_url_handler_exec(self):
+        """Return the Exec= line for the affinity:// handler.
+
+        It reuses the Exec= line of Affinity.desktop when that runs Wine directly, so a
+        cold start through the handler matches the desktop entry. Otherwise, for example
+        with the Ubuntu Snapshot launcher script, it builds the equivalent command.
+        """
+        desktop_file = Path.home() / ".local" / "share" / "applications" / "Affinity.desktop"
+        try:
+            for line in desktop_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("Exec=") and re.search(r'(Affinity|AffinityHook)\.exe"\s*$', line):
+                    return line.rstrip()
+        except (OSError, UnicodeError):
+            pass
+        exec_line, _ = self._build_affinity_exec_line(prefer_hook=True)
+        return exec_line
+
+    def winmetadata_installed(self):
+        """Return True when the prefix has WinMetadata (.winmd files) in system32"""
+        winmetadata = Path(self.directory) / "drive_c" / "windows" / "system32" / "WinMetadata"
+        try:
+            return any(winmetadata.glob("*.winmd"))
+        except OSError:
+            return False
+
+    def create_affinity_url_handler(self):
+        """Register the affinity:// handler that completes the Canva sign-in.
+
+        The browser hands the sign-in callback to this handler. It launches Affinity with
+        the URL, and a running Affinity receives it from that second instance over a named
+        pipe. It is only registered with Wine 9.14 or 10.10 and once WinMetadata and the
+        WinRT facades are installed: otherwise the running Affinity crashes when the URL
+        arrives. Wine's generated handler is replaced because it runs `wine start`, which
+        crashes on URLs longer than about 300 characters.
+        """
+        if not self.affinity_v3_exe_path().exists():
+            return False
+        desktop_dir = Path.home() / ".local" / "share" / "applications"
+        handler_file = desktop_dir / self.AFFINITY_URL_HANDLER
+
+        wine_support = self.canva_sign_in_wine_support()
+        if wine_support != "supported":
+            if wine_support == "unknown":
+                self.log("Could not run the prefix's Wine, not changing the affinity:// handler", "warning")
+                return False
+            # A handler left from an earlier Wine version would crash the running Affinity.
+            if handler_file.exists():
+                self.remove_affinity_url_handler()
+            self.log("Not registering the affinity:// handler: the Canva sign-in fix supports Wine 9.14 and 10.10", "info")
+            return False
+        if not self.windowsruntime_facades_installed() or not self.winmetadata_installed():
+            self.log("WinRT facades or WinMetadata missing, not registering the affinity:// handler", "warning")
+            return False
+
+        # Ask before writing our desktop file, so it cannot be the query's fallback answer.
+        current = self.get_default_url_handler("affinity")
+        if current not in (None, handler_file.name, "wine-protocol-affinity.desktop"):
+            self.log(
+                f"affinity:// is handled by {current}; leaving it. For the Canva sign-in in this "
+                "prefix, remove that default and use Troubleshooting > Fix Canva Sign-in (v3)",
+                "warning",
+            )
+            return False
+
+        try:
+            desktop_dir.mkdir(parents=True, exist_ok=True)
+            with open(handler_file, "w", encoding="utf-8") as f:
+                f.write("[Desktop Entry]\n")
+                f.write("Type=Application\n")
+                f.write("Name=Affinity sign-in handler\n")
+                f.write(f"{self._affinity_url_handler_exec()} %u\n")
+                f.write("MimeType=x-scheme-handler/affinity;\n")
+                f.write("NoDisplay=true\n")
+                f.write("Terminal=false\n")
+        except OSError as e:
+            self.log(f"Could not write {handler_file}: {e}", "warning")
+            return False
+
+        if self.check_command("update-desktop-database"):
+            self._run_uncancellable(["update-desktop-database", str(desktop_dir)])
+
+        # Set it even when the query already names this handler: the query can fall back
+        # to any installed handler when mimeapps.list has no valid entry.
+        if not self._set_default_url_handler("affinity", handler_file.name):
+            return False
+        wine_protocol_entry = desktop_dir / "wine-protocol-affinity.desktop"
+        try:
+            if wine_protocol_entry.exists():
+                wine_protocol_entry.unlink()
+        except OSError:
+            pass
+        if current != handler_file.name:
+            self.log("Registered the affinity:// handler used by the Canva sign-in", "success")
+        return True
+
+    def remove_affinity_url_handler(self):
+        """Remove the affinity:// handler and its default-handler entry"""
+        desktop_dir = Path.home() / ".local" / "share" / "applications"
+        handler_file = desktop_dir / self.AFFINITY_URL_HANDLER
+        try:
+            # Query before deleting: xdg-mime ignores defaults whose desktop file is gone.
+            is_default = self.get_default_url_handler("affinity") == handler_file.name
+            if handler_file.exists():
+                handler_file.unlink()
+                self.log(f"Removed {handler_file.name}", "info")
+            if is_default:
+                self._write_mimeapps_default("x-scheme-handler/affinity", None, remove=handler_file.name)
+            if self.check_command("update-desktop-database"):
+                self._run_uncancellable(["update-desktop-database", str(desktop_dir)])
+        except Exception as e:
+            self.log(f"Could not remove the affinity:// handler: {e}", "warning")
+
     def create_desktop_entry(self, app_name):
         """Create desktop entry for application"""
         if app_name == "Add":
@@ -16502,6 +16963,7 @@ Would you like to continue with {distro_name} anyway?"""
             if snapshot_script.exists():
                 if self.install_ubuntu_snapshot_launchers(show_dialog=False):
                     self.log("Unified Affinity desktop entry now uses the Ubuntu Snapshot launcher", "info")
+                    self.create_affinity_url_handler()
                     return
                 self.log("Ubuntu Snapshot launcher installation failed, falling back to the built-in desktop entry writer", "warning")
 
@@ -16605,6 +17067,10 @@ Would you like to continue with {distro_name} anyway?"""
                     f"Warning: Could not remove wine-protocol-affinity.desktop: {e}",
                     "warning",
                 )
+
+        if app_name == "Add":
+            # After Affinity.desktop is written, so the handler reuses its Exec= line.
+            self.create_affinity_url_handler()
 
         # Create desktop shortcut
         desktop_shortcut = Path.home() / "Desktop" / desktop_file.name
@@ -18395,6 +18861,8 @@ Would you like to continue with {distro_name} anyway?"""
                         f"Warning: Could not remove {desktop_file.name}: {e}", "warning"
                     )
 
+        self.remove_affinity_url_handler()
+
         # Also remove Wine's default entries if they exist
         wine_desktop_dir = desktop_dir / "wine" / "Programs"
         wine_entries = [
@@ -19127,6 +19595,7 @@ Would you like to continue with {distro_name} anyway?"""
             self.log(
                 f"✓ Affinity.desktop updated to launch {exe_name}", "success"
             )
+            self.create_affinity_url_handler()
 
         except Exception as e:
             self.log(f"✗ Failed to patch Affinity.desktop: {e}", "error")
