@@ -4311,6 +4311,14 @@ class AffinityInstallerGUI(QMainWindow):
         msg_box.setWindowTitle(title)
         msg_box.setText(message)
         msg_box.setStandardButtons(qbuttons)
+        default_button = {
+            "Yes": QMessageBox.StandardButton.Yes,
+            "No": QMessageBox.StandardButton.No,
+            "Retry": QMessageBox.StandardButton.Retry,
+            "Cancel": QMessageBox.StandardButton.Cancel,
+        }.get(getattr(self, "question_dialog_default", None))
+        if default_button is not None:
+            msg_box.setDefaultButton(default_button)
         msg_box.setStyleSheet(self.get_messagebox_stylesheet())
         msg_box.adjustSize()
         reply = msg_box.exec()
@@ -4329,9 +4337,10 @@ class AffinityInstallerGUI(QMainWindow):
 
         self.waiting_for_question_response = False
 
-    def show_question_dialog(self, title, message, buttons=["Yes", "No"]):
-        """Show question dialog (thread-safe)"""
+    def show_question_dialog(self, title, message, buttons=["Yes", "No"], default_button=None):
+        """Show question dialog (thread-safe). default_button names the button Enter selects."""
         self.question_dialog_response = None
+        self.question_dialog_default = default_button
         self.waiting_for_question_response = True
         self.question_dialog_signal.emit(title, message, buttons)
 
@@ -14110,6 +14119,16 @@ Would you like to continue with {distro_name} anyway?"""
             #     installer_file.unlink()
             # self.log("Installer file removed", "success")
 
+            if app_name == "Add" and not self.affinity_v3_exe_path().exists():
+                if self.check_cancelled():
+                    return
+                self.log("The Affinity setup finished without installing Affinity", "warning")
+                installed, reason = self.install_affinity_v3_from_msi(installer_file, env)
+                if not installed:
+                    if not self.cancel_event.is_set():
+                        self.show_affinity_not_installed(reason, declined=reason == self.MSI_DECLINED)
+                    return
+
             # Restore WinMetadata (only needed for Wine 9.14 and 10.10, not 11.12+)
             wine_version = self.get_current_wine_version()
             if wine_version in ["9.14", "10.10"]:
@@ -14581,6 +14600,138 @@ Would you like to continue with {distro_name} anyway?"""
         finally:
             self.end_operation()
 
+    def affinity_v3_exe_path(self):
+        """Return the path of the Affinity v3 (Unified) executable in the prefix"""
+        return Path(self.directory) / "drive_c" / "Program Files" / "Affinity" / "Affinity" / "Affinity.exe"
+
+    MSI_DECLINED = "You chose not to install Affinity from its MSI package."
+    AFFINITY_KNOWN_ISSUES_URL = (
+        "https://github.com/ryzendew/Linux-Affinity-Installer/blob/main/docs/Known-issues.md"
+        "#affinity-installer-setupuiexe-crashes"
+    )
+
+    def install_affinity_v3_from_msi(self, installer_file, env):
+        """Install Affinity v3 from the MSI package embedded in its setup executable.
+
+        The WPF setup window in Affinity-x64.exe (SetupUI.exe) crashes on some Wine
+        builds before it installs anything, such as the Wine 10.0 that Ubuntu 26.04
+        packages. That window installs the same MSI package, so it is installed here with
+        msiexec and the prefix's own Wine.
+
+        Returns (installed, reason), where reason explains a failure to the user.
+        """
+        for stale in Path(self.directory).glob(".affinity-msi-*"):
+            shutil.rmtree(stale, ignore_errors=True)
+        if not self.check_command("7z"):
+            self.log("7z not found, cannot extract the Affinity MSI package", "error")
+            return False, (
+                "Installing Affinity from its MSI package needs 7z. Install 7-Zip and run the "
+                "installation again."
+            )
+
+        reply = self.show_question_dialog(
+            "Install Affinity from its MSI package?",
+            "The Affinity setup finished, but Affinity.exe is not in "
+            "C:\\Program Files\\Affinity\\Affinity. The setup window crashes on some Wine "
+            "builds, such as the Wine 10.0 in Ubuntu 26.04.\n\n"
+            "The setup file contains the MSI package that the setup window installs. This "
+            "installer can install it into the default folder. It needs about 700 MB of "
+            "temporary space in the prefix.\n\n"
+            "Install Affinity this way? If you closed the setup yourself or chose another "
+            "folder, choose No.",
+            ["Yes", "No"],
+            default_button="No",
+        )
+        if reply != "Yes":
+            if self.cancel_event.is_set():
+                return False, "The installation was cancelled."
+            self.log("MSI installation declined", "info")
+            return False, self.MSI_DECLINED
+
+        # The prefix is on disk; /tmp may be RAM-backed and the MSI is about 640 MB.
+        with tempfile.TemporaryDirectory(prefix=".affinity-msi-", dir=self.directory) as temp_dir:
+            self.update_progress_text("Extracting the Affinity MSI package...")
+            # 7z exits with 1 on warnings, so the extracted files decide success.
+            _, stdout, stderr = self.run_command(
+                ["7z", "x", "-t#", "-y", f"-o{temp_dir}", str(installer_file)], check=False
+            )
+            if self.cancel_event.is_set():
+                return False, "The installation was cancelled."
+            msi_files = sorted(
+                Path(temp_dir).glob("*.msi"), key=lambda path: path.stat().st_size, reverse=True
+            )
+            for msi in msi_files:
+                self.log(f"  Found {msi.name} ({msi.stat().st_size // (1024 * 1024)} MB)", "info")
+            if not msi_files:
+                self.log(f"7z could not extract an MSI package from {installer_file.name}: {(stdout + stderr).strip()}", "error")
+                return False, (
+                    f"7z could not extract the MSI package from {installer_file.name}. "
+                    "Check the free disk space. Details are in the log."
+                )
+
+            # The setup ran with the system Wine; wait for its wineserver to exit before
+            # the prefix's own Wine uses the same prefix.
+            try:
+                subprocess.run(["wineserver", "-w"], env=env, timeout=60, check=False)
+            except subprocess.TimeoutExpired:
+                self.log("The system wineserver is still running after 60 seconds", "error")
+                return False, (
+                    "Wine processes from the setup are still running. Close them, or stop them "
+                    f"with: WINEPREFIX={self.directory} wineserver -k\n"
+                    "Then run the installation again."
+                )
+            except OSError:
+                self.log("System wineserver not found, not waiting for the setup's Wine processes", "warning")
+            if self.cancel_event.is_set():
+                return False, "The installation was cancelled."
+
+            wine = self.get_wine_path("wine")
+            if not wine.exists():
+                self.log(f"Wine not found at {wine}", "error")
+                return False, f"The prefix's Wine was not found at {wine}."
+            msi_log = Path(self.directory) / "affinity-msi.log"
+            self.update_progress_text("Installing Affinity from its MSI package...")
+            self.log(
+                f"Installing {msi_files[0].name} with msiexec (log: {msi_log})...",
+                "info",
+            )
+            # The setup window also passes REBOOT=ReallySuppress. Its desktop shortcut
+            # checkbox sets INSTALL_DESKTOP_SHORTCUT_PROPERTY; this installer makes its own
+            # shortcuts, so the MSI's is turned off.
+            success, _, _ = self.run_command(
+                [
+                    str(wine), "msiexec", "/i",
+                    self._to_windows_path(msi_files[0], env=env),
+                    "REBOOT=ReallySuppress",
+                    "INSTALL_DESKTOP_SHORTCUT_PROPERTY=#0",
+                    "/l*v", self._to_windows_path(msi_log, env=env),
+                ],
+                check=False,
+                env=env,
+            )
+            if not success:
+                self.log(f"msiexec did not succeed, see {msi_log}", "warning")
+            self.log("Waiting for Wine processes to finish...", "info")
+            self.run_command([str(self.get_wine_path("wineserver")), "-w"], check=False, env=env)
+
+        if self.affinity_v3_exe_path().exists():
+            self.log("Affinity installed from its MSI package", "success")
+            return True, ""
+        return False, f"msiexec did not install Affinity. See {msi_log}."
+
+    def show_affinity_not_installed(self, reason, declined=False):
+        """Report that Affinity v3 was not installed, with the reason and where to look next"""
+        self.log(
+            f"Affinity was not installed: {reason} See {self.AFFINITY_KNOWN_ISSUES_URL}",
+            "warning" if declined else "error",
+        )
+        self.show_message(
+            "Affinity Not Installed",
+            f"Affinity was not installed.\n\n{reason}\n\n"
+            f"See 'Affinity Installer (SetupUI.exe) Crashes':\n{self.AFFINITY_KNOWN_ISSUES_URL}",
+            "warning" if declined else "error",
+        )
+
     def run_installation(self, app_name, installer_path):
         """Run the installation process"""
         try:
@@ -14659,6 +14810,13 @@ Would you like to continue with {distro_name} anyway?"""
             if not success and not self.check_cancelled():
                 self.log("Installer process exited with a non-zero status", "warning")
 
+            installs_unified = app_name in ("Add", "Affinity (Unified)")
+            affinity_v3_exe = self.affinity_v3_exe_path()
+            msi_failure = "The Affinity setup finished without installing Affinity."
+            if installs_unified and not affinity_v3_exe.exists() and not self.check_cancelled():
+                self.log("The Affinity setup finished without installing Affinity", "warning")
+                _, msi_failure = self.install_affinity_v3_from_msi(installer_file, env)
+
             # Clean up installer (only if it was copied to Wine prefix, not if it's in .AffinityLinux/Installer/)
             self.update_progress(0.5)
             if installer_file.parent != installer_dir:
@@ -14671,6 +14829,13 @@ Would you like to continue with {distro_name} anyway?"""
                     f"Installer kept in .AffinityLinux/Installer/: {installer_file.name}",
                     "info",
                 )
+
+            if installs_unified:
+                if self.check_cancelled():
+                    return
+                if not affinity_v3_exe.exists():
+                    self.show_affinity_not_installed(msi_failure, declined=msi_failure == self.MSI_DECLINED)
+                    return
 
             # Restore WinMetadata (only needed for Wine 9.14 and 10.10, not 11.12+)
             wine_version = self.get_current_wine_version()
