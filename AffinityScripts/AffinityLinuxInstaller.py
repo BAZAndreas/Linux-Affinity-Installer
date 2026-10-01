@@ -14664,10 +14664,6 @@ Would you like to continue with {distro_name} anyway?"""
         finally:
             self.end_operation()
 
-    def affinity_v3_exe_path(self):
-        """Return the path of the Affinity v3 (Unified) executable in the prefix"""
-        return Path(self.directory) / "drive_c" / "Program Files" / "Affinity" / "Affinity" / "Affinity.exe"
-
     MSI_DECLINED = "You chose not to install Affinity from its MSI package."
     AFFINITY_KNOWN_ISSUES_URL = (
         "https://github.com/ryzendew/Linux-Affinity-Installer/blob/main/docs/Known-issues.md"
