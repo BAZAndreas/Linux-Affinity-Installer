@@ -63,6 +63,10 @@ When DXVK provides d3d9, leave `DXVK_CONFIG` unset. `d3d9.deferSurfaceCreation =
 ### Affinity Installer (SetupUI.exe) Crashes
 **Issue:** The Affinity v3 setup program crashes under Wine with `Value cannot be null. Parameter name: icon` in `SetupUI.Util.GetShieldIcon`.
 
+**Seen on:** Ubuntu 26.04, where the setup runs under the packaged Wine 10.0 and crashes this way. Its log is `drive_c/users/<user>/AppData/Local/Temp/AffinitySetup/<id>/SetupUI.log` in the prefix.
+
+**What the installer does:** When the setup finishes without installing Affinity v3, the installer offers to install the MSI package embedded in `Affinity-x64.exe`. The setup window installs the same package. The installer uses `msiexec` and the prefix's own Wine. This needs `7z` and about 700 MB of temporary space in the prefix. The MSI install is logged to `affinity-msi.log` in the prefix (default `~/.AffinityLinux`). If it does not install Affinity, the installer stops with a message and runs none of the post-install steps. Tested only with ElementalWarrior Wine 10.10, 7-Zip 26.00 and Affinity 3.3.0.4850.
+
 **Workaround:** Canva also distributes Affinity as `Affinity x64.msix`, which is a zip archive. Extract its `App/` folder into the install location instead of running the setup program:
 ```bash
 D="$HOME/.AffinityLinux/drive_c/Program Files/Affinity/Affinity"
