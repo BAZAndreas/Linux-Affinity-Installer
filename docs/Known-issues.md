@@ -162,22 +162,20 @@ unzip -q "$HOME/Downloads/Affinity x64.msix" 'App/*' && cp -a App/. . && rm -rf 
 WINEPREFIX="$HOME/.AffinityLinux" wine reg add 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d 192 /f
 ```
 
-### Microsoft Edge WebView2 Runtime Not Working
-**Issue:** The Microsoft Edge WebView2 Runtime is broken and does not work properly in Wine. This affects features in Affinity v3 that rely on WebView2, such as the Help system and some web-based dialogs.
+### Microsoft Edge WebView2: Help Window Is Empty
+**Issue:** In Affinity v3 the Help window opens but stays empty. Affinity shows the Help with the Microsoft Edge WebView2 Runtime.
 
-**Status:** Known limitation - cannot be fixed
+**Cause:** With `msedgewebview2.exe` set to Windows 11 compatibility, the WebView2 GPU process fails at startup and WebView2 stops with `GPU process isn't usable. Goodbye.`
 
-**Impact:**
-- Help system in Affinity v3 may not work
-- Some web-based dialogs may fail to load
-- For the Canva sign-in, see [Login/Authentication Issues](#loginauthentication-issues)
+**Fix:** Troubleshooting → "WebView2 Runtime (v3)" installs the runtime if it is missing and sets `msedgewebview2.exe` to Windows 7 compatibility. When the runtime is already installed, it applies the WebView2 settings again. To set it by hand with the prefix's Wine:
+```bash
+WINEPREFIX="$HOME/.AffinityLinux" "$HOME/.AffinityLinux/ElementalWarriorWine/bin/wine" reg add 'HKCU\Software\Wine\AppDefaults\msedgewebview2.exe' /v Version /d win7 /f
+```
+Restart Affinity afterwards.
 
-**Workaround:**
-- Use the application's built-in help files if available
-- Access documentation online instead of using in-app help
-- This is a Wine limitation and cannot be resolved until Wine improves WebView2 support
+Tested with ElementalWarrior Wine 10.10, WebView2 Runtime 142.0.3595.94 and Affinity 3.3.0.4850 on Ubuntu 26.04. Untested with Wine 9.14 and 11.12. Other WebView2 dialogs were not tested.
 
-**Note:** Do not open issues about WebView2 - this is a known limitation that cannot be fixed.
+For the Canva sign-in, see [Login/Authentication Issues](#loginauthentication-issues).
 
 ### Login/Authentication Issues
 **Issue:** After signing in to Canva in the browser, the `affinity://` callback never reaches Affinity v3, or Affinity crashes when it arrives.

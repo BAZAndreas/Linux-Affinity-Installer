@@ -13477,13 +13477,16 @@ Would you like to continue with {distro_name} anyway?"""
         self.run_command([str(regedit), str(disable_edge_update_reg)], check=False, env=env)
         disable_edge_update_reg.unlink()
 
-        self.log("Ensuring msedgewebview2.exe stays on Windows 11 compatibility...", "info")
+        # With Wine 10.10 and msedgewebview2.exe as Windows 11, the WebView2 GPU
+        # process fails at startup and the Affinity v3 Help window stays empty.
+        # As Windows 7 it renders.
+        self.log("Setting msedgewebview2.exe to Windows 7 compatibility...", "info")
         self.run_command(
             [
                 str(wine), "reg", "add",
                 "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\msedgewebview2.exe",
                 "/v", "Version",
-                "/d", "win11",
+                "/d", "win7",
                 "/f",
             ],
             check=False,
