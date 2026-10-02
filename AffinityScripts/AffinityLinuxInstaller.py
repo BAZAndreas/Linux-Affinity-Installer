@@ -19,6 +19,7 @@ import re
 import json
 import hashlib
 import tempfile
+import queue
 from pathlib import Path
 import time
 import signal
@@ -5379,25 +5380,257 @@ class AffinityInstallerGUI(QMainWindow):
                 dll_overrides.append(required_override)
         env["WINEDLLOVERRIDES"] = ";".join(dll_overrides)
 
-        if self.is_ubuntu_family_distro():
-            local_wine = self.get_wine_path("wine")
-            local_wineserver = self.get_wine_path("wineserver")
-            if local_wine.exists():
-                env["WINE"] = str(local_wine)
-                env["WINELOADER"] = str(local_wine)
-                env["PATH"] = f"{local_wine.parent}:{env.get('PATH', '')}"
-                if local_wineserver.exists():
-                    env["WINESERVER"] = str(local_wineserver)
-                self.log("Using local installer Wine for winetricks on this Ubuntu-family system.", "info")
-            else:
-                self.log("Local installer Wine not found; winetricks will fall back to system Wine.", "warning")
+        # Always prefer the Wine build that owns the prefix, on every distro.
+        # Running winetricks under a *second* Wine build lets two wineservers
+        # alternate on one prefix — which is where the .NET installers wedge.
+        local_wine = self.get_wine_path("wine")
+        if local_wine.exists():
+            env = self._use_wine_in_env(env, local_wine)
+            self.log(f"winetricks: using the prefix's Wine ({local_wine})", "info")
+            self._warn_new_wow64_wine(local_wine)
             return env
 
-        self.log("Setting up wine-tkg for winetricks...", "info")
-        if not self.ensure_wine_tkg():
-            self.log("Failed to setup wine-tkg, continuing with system wine", "warning")
+        if self.is_ubuntu_family_distro():
+            self.log("Local installer Wine not found; winetricks will fall back to system Wine.", "warning")
             return env
-        return self.get_winetricks_env_with_tkg(env)
+
+        # No prefix Wine at all: fall back, preferring a pre-11 Wine when we get
+        # to choose. AffinityLinuxInstaller.sh refuses Wine >= 11 for winetricks
+        # because of hangs in Wine's new WoW64 mode.
+        self.log("Setting up wine-tkg for winetricks...", "info")
+        if self.ensure_wine_tkg():
+            wine_tkg_bin = self.get_wine_tkg_path("wine")
+            if (
+                wine_tkg_bin
+                and wine_tkg_bin.exists()
+                and self._wine_binary_is_functional(wine_tkg_bin)
+            ):
+                system_wine = shutil.which("wine")
+                tkg_major = self._wine_major_version(wine_tkg_bin)
+                system_major = (
+                    self._wine_major_version(system_wine) if system_wine else None
+                )
+                if (
+                    tkg_major is not None
+                    and tkg_major >= 11
+                    and system_major is not None
+                    and system_major < 11
+                ):
+                    self.log(
+                        f"Preferring system Wine {system_major}.x over wine-tkg "
+                        f"{tkg_major}.x for winetricks (Wine 11+ new WoW64 hangs winetricks).",
+                        "warning",
+                    )
+                    return self._pin_system_wine_in_env(env)
+                return self.get_winetricks_env_with_tkg(env)
+        self.log("Failed to setup wine-tkg, continuing with system wine", "warning")
+        return self._pin_system_wine_in_env(env)
+
+    def _use_wine_in_env(self, env, wine_bin):
+        """Point WINE/WINELOADER/WINESERVER/PATH at one specific Wine build."""
+        wine_bin = Path(wine_bin)
+        env["WINE"] = str(wine_bin)
+        env["WINELOADER"] = str(wine_bin)
+        env["PATH"] = f"{wine_bin.parent}:{env.get('PATH', '')}"
+        wineserver = wine_bin.parent / "wineserver"
+        if wineserver.exists():
+            env["WINESERVER"] = str(wineserver)
+        return env
+
+    def _wine_major_version(self, wine_bin):
+        """Major version of a Wine binary (11 for "wine-11.18"), or None."""
+        if not wine_bin:
+            return None
+        wine_bin = str(wine_bin)
+        if not Path(wine_bin).exists() and not shutil.which(wine_bin):
+            return None
+        try:
+            result = subprocess.run(
+                [wine_bin, "--version"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=15,
+            )
+            match = re.search(
+                r"wine-(\d+)\.", f"{result.stdout or ''}{result.stderr or ''}"
+            )
+            if match:
+                return int(match.group(1))
+        except Exception:
+            pass
+        return None
+
+    def _warn_new_wow64_wine(self, wine_bin):
+        """Say out loud when winetricks is about to run on a Wine 11+ build.
+
+        AffinityLinuxInstaller.sh refuses Wine >= 11 for winetricks (hangs in
+        the new WoW64 mode). We cannot always avoid that build, so at least
+        tell the user what to try when a component stalls."""
+        major = self._wine_major_version(wine_bin)
+        if major is not None and major >= 11:
+            self.log(
+                f"winetricks is running on Wine {major}.x. Wine 11+ new WoW64 mode is "
+                "known to hang the .NET installers — if a component stalls, re-run "
+                "Wine setup with Wine 10.10 and try again.",
+                "warning",
+            )
+        return major
+
+    def build_winetricks_command(self, component, extra_flags=(), verbose=True):
+        """Build a winetricks command line for a single verb.
+
+        `--force` means "don't check whether packages were already installed",
+        so without it winetricks skips a verb it can already see is installed.
+        That matters for the .NET verbs: forcing them re-runs the whole
+        multi-minute .NET chain on every attempt, and that chain is exactly
+        where Wine wedges (the 64-bit ngen.exe never returns).
+        """
+        skip_force = {
+            "dotnet20",
+            "dotnet20sp1",
+            "dotnet30",
+            "dotnet30sp1",
+            "dotnet35",
+            "dotnet35sp1",
+            "dotnet40",
+            "dotnet45",
+            "dotnet471",
+            "dotnet472",
+            "dotnet48",
+        }
+        verb = str(component).split("=", 1)[0]
+        command = ["winetricks", "--unattended"]
+        if verbose:
+            command.append("--verbose")
+        command.extend(["--no-isolate", "--optout"])
+        if verb not in skip_force:
+            command.append("--force")
+        command.extend(str(flag) for flag in extra_flags)
+        command.append(component)
+        return command
+
+    def _prefix_wine_pids(self):
+        """PIDs of processes whose environment points at our WINEPREFIX.
+
+        Never returns our own process or anything in our process group."""
+        # Compare against every spelling of the prefix path we may have handed
+        # out (raw string, normalised, trailing slash).
+        prefixes = {
+            str(self.directory),
+            str(Path(self.directory)),
+            str(Path(self.directory)) + os.sep,
+        }
+        pids = []
+        try:
+            own_pgid = os.getpgrp()
+        except Exception:
+            own_pgid = None
+        try:
+            entries = os.listdir("/proc")
+        except Exception:
+            return pids
+
+        for entry in entries:
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid == os.getpid():
+                continue
+            try:
+                with open(f"/proc/{pid}/environ", "rb") as handle:
+                    data = handle.read()
+            except Exception:
+                continue
+            matched = False
+            for item in data.split(b"\0"):
+                if item.startswith(b"WINEPREFIX="):
+                    value = item.split(b"=", 1)[1].decode("utf-8", "replace")
+                    matched = value in prefixes
+                    break
+            if not matched:
+                continue
+            if own_pgid is not None:
+                try:
+                    if os.getpgid(pid) == own_pgid:
+                        continue
+                except Exception:
+                    pass
+            pids.append(pid)
+        return pids
+
+    def stop_prefix_wine_processes(self, env=None, reason=""):
+        """Stop every process still running against our WINEPREFIX.
+
+        Left-over Wine work — a wedged .NET installer, an abandoned winetricks
+        run, a wineserver started by a different Wine build — keeps Windows
+        Installer busy, so the next winetricks run blocks forever waiting for a
+        lock nobody will release. Returns True when the prefix is quiet."""
+        if self.cancel_event.is_set():
+            return False
+
+        pids = self._prefix_wine_pids()
+        if not pids:
+            return True
+
+        what = "leftover Wine process(es)"
+        if reason:
+            self.log(f"Stopping {len(pids)} {what} in {self.directory} — {reason}", "info")
+        else:
+            self.log(f"Stopping {len(pids)} {what} in {self.directory}", "info")
+
+        # 1. Ask politely first
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+        # 2. Let the prefix's wineserver release its locks as well
+        run_env = dict(env) if env else os.environ.copy()
+        run_env.setdefault("WINEPREFIX", self.directory)
+        wineserver = None
+        for candidate in (
+            run_env.get("WINESERVER"),
+            str(self.get_wine_path("wineserver")),
+            shutil.which("wineserver"),
+        ):
+            if candidate and Path(candidate).exists():
+                wineserver = candidate
+                break
+        if wineserver:
+            try:
+                subprocess.run(
+                    [wineserver, "-k"],
+                    env=run_env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                    check=False,
+                )
+            except Exception:
+                pass
+
+        # 3. Wait for them to leave, then force whatever is left
+        remaining = list(pids)
+        deadline = time.monotonic() + 20
+        while remaining and time.monotonic() < deadline:
+            if self.cancel_event.is_set():
+                return False
+            time.sleep(0.5)
+            remaining = [
+                pid for pid in remaining if Path(f"/proc/{pid}").exists()
+            ]
+        for pid in remaining:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        if remaining:
+            self.log(f"Force-killed {len(remaining)} stuck Wine process(es)", "warning")
+        else:
+            self.log("Prefix is clean", "success")
+        return True
 
     def prefix_has_installed_affinity(self):
         """Return True when the prefix already contains an installed Affinity executable"""
@@ -5795,14 +6028,62 @@ class AffinityInstallerGUI(QMainWindow):
         except Exception as e:
             return False, "", str(e)
 
-    def run_command_streaming(self, command, env=None, progress_callback=None):
-        """Execute command and stream output to log in real-time, cancellable.
-        Also stores the full streamed text in self._last_stream_output_text for post-run heuristics."""
-        self._last_stream_output_text = ""
-        try:
-            if isinstance(command, str):
-                command = command.split()
+    @staticmethod
+    def _pump_child_output(stream, out_queue):
+        """Read a child's stdout line by line and push lines onto `out_queue`.
 
+        Runs in its own thread so the caller can keep polling for cancellation
+        and stalls while the child is silent. A `None` sentinel marks EOF.
+        """
+        try:
+            for line in iter(stream.readline, ""):
+                out_queue.put(line)
+        except Exception:
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            out_queue.put(None)
+
+    def get_stall_timeout(self, default=1800):
+        """Seconds a streamed command may run without printing anything.
+
+        Override with the AFFINITY_STALL_TIMEOUT environment variable.
+        """
+        try:
+            value = int(os.environ.get("AFFINITY_STALL_TIMEOUT", ""))
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            pass
+        return default
+
+    def run_command_streaming(
+        self, command, env=None, progress_callback=None, stall_timeout=None
+    ):
+        """Execute command and stream output to log in real-time, cancellable.
+
+        A reader thread decodes the child's output (leniently, so a stray
+        non-UTF-8 byte from Wine can never abort the run) while this loop:
+          * honours cancel_event even while the child prints nothing,
+          * kills the child once it has been silent for `stall_timeout`
+            seconds — winetricks wedged inside a .NET installer otherwise
+            blocks forever with the progress bar frozen at "Installing".
+
+        Also stores the full streamed text in self._last_stream_output_text
+        for post-run heuristics.
+        """
+        self._last_stream_output_text = ""
+        if stall_timeout is None:
+            stall_timeout = self.get_stall_timeout()
+        if isinstance(command, str):
+            command = command.split()
+        display_cmd = " ".join(str(part) for part in command[:8])
+
+        process = None
+        try:
             # Set up environment for non-interactive operation
             if env is None:
                 env = os.environ.copy()
@@ -5827,6 +6108,7 @@ class AffinityInstallerGUI(QMainWindow):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",  # never die on undecodable Wine output
                 bufsize=1,
                 universal_newlines=True,
                 env=env,
@@ -5834,18 +6116,61 @@ class AffinityInstallerGUI(QMainWindow):
             )
             self._register_process(process)
 
-            # Stream output line by line
+            # Stream output line by line without ever blocking indefinitely
+            lines = queue.Queue()
+            threading.Thread(
+                target=self._pump_child_output,
+                args=(process.stdout, lines),
+                daemon=True,
+            ).start()
+
             buffer = []
-            for line in iter(process.stdout.readline, ""):
+            last_output = time.monotonic()
+            warned_stall = False
+
+            while True:
                 if self.cancel_event.is_set():
                     self._terminate_process(process)
                     self._last_stream_output_text = "".join(buffer)
                     return False
+
+                try:
+                    line = lines.get(timeout=0.5)
+                except queue.Empty:
+                    idle = time.monotonic() - last_output
+                    if idle >= stall_timeout:
+                        self.log(
+                            f"  ✗ No output from '{display_cmd}' for {int(idle)}s — "
+                            "assuming it is stuck and stopping it.",
+                            "error",
+                        )
+                        self.log(
+                            "  (Set AFFINITY_STALL_TIMEOUT to raise the limit, or "
+                            "check the last log lines above for the step it died on.)",
+                            "info",
+                        )
+                        self._terminate_process(process)
+                        self._last_stream_output_text = "".join(buffer)
+                        return False
+                    if not warned_stall and idle >= stall_timeout / 2:
+                        warned_stall = True
+                        self.log(
+                            f"  Waiting on '{display_cmd}' — no output for "
+                            f"{int(idle)}s (stall limit {stall_timeout}s)...",
+                            "warning",
+                        )
+                    continue
+
+                if line is None:  # EOF sentinel from the reader thread
+                    break
+
+                last_output = time.monotonic()
                 if line:
                     # Clean up the line and log it
                     line = line.rstrip()
                     if line:
                         buffer.append(line + "\n")
+                        warned_stall = False
                         # Show important progress messages
                         line_lower = line.lower()
                         # Always show progress-related messages
@@ -5874,8 +6199,6 @@ class AffinityInstallerGUI(QMainWindow):
 
                             # Try to extract progress percentage if callback provided
                             if progress_callback:
-                                import re
-
                                 percent_match = re.search(
                                     r"(\d+)\s*%", line, re.IGNORECASE
                                 )
@@ -5893,17 +6216,35 @@ class AffinityInstallerGUI(QMainWindow):
                             # Show other non-debug messages
                             self.log(f"  {line}", "info")
 
-            process.wait()
+            # Reader hit EOF: give the child a moment to exit on its own, but do
+            # not block forever if it hung up after closing its output.
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                self.log(
+                    f"  '{display_cmd}' closed its output but is still running — "
+                    "stopping it.",
+                    "warning",
+                )
+                self._terminate_process(process)
             self._last_stream_output_text = "".join(buffer)
             return process.returncode == 0
         except Exception as e:
             self.log(f"Error running command: {e}", "error")
+            if process is not None:
+                # Never leave the child running on its own — orphaned winetricks
+                # runs are what wedge the next attempt.
+                try:
+                    self._terminate_process(process)
+                except Exception:
+                    pass
             return False
         finally:
-            try:
-                self._unregister_process(process)
-            except Exception:
-                pass
+            if process is not None:
+                try:
+                    self._unregister_process(process)
+                except Exception:
+                    pass
 
     def _to_windows_path(self, unix_path, env=None):
         """Convert a UNIX path to a Windows path for Wine 'start' using winepath.
@@ -6036,7 +6377,9 @@ class AffinityInstallerGUI(QMainWindow):
                 cmd_str = " ".join(shlex.quote(c) for c in cmd)
                 self.log(f"Running ({label}) attempt {idx}: {cmd_str}", "info")
                 t0 = time.time()
-                ok = self.run_command_streaming(cmd, env=env)
+                # Affinity/WebView2 installers print nothing while they work
+                # (WINEDEBUG is silenced), so give them a long leash.
+                ok = self.run_command_streaming(cmd, env=env, stall_timeout=3600)
                 dt = time.time() - t0
 
                 # For Affinity installers, check if installer is actually running despite exceptions
@@ -11371,17 +11714,11 @@ class AffinityInstallerGUI(QMainWindow):
         env = os.environ.copy()
         env = self.get_winetricks_env(env)
 
+        # A leftover winetricks/Wine process would make this run queue behind it.
+        self.stop_prefix_wine_processes(env, reason="winetricks needs an idle prefix")
 
         success = self.run_command_streaming(
-            [
-                "winetricks",
-                "--unattended",
-                "--verbose",
-                "--force",
-                "--no-isolate",
-                "--optout",
-                "dxvk",
-            ],
+            self.build_winetricks_command("dxvk", verbose=False),
             env=env,
             progress_callback=None,
         )
@@ -11928,11 +12265,27 @@ class AffinityInstallerGUI(QMainWindow):
             "crypt32",
         ]
 
+        # Clear out anything still holding the prefix (a wedged installer from a
+        # previous attempt, an abandoned winetricks, a wineserver from another
+        # Wine build) — otherwise Windows Installer keeps the next run waiting.
+        self.stop_prefix_wine_processes(
+            env, reason="winetricks needs an idle prefix"
+        )
+
         self.log(
             "Installing Wine components (this may take several minutes)...", "info"
         )
         total_components = len(components)
         for idx, component in enumerate(components):
+            if self.cancel_event.is_set():
+                return False
+
+            # Every verb starts from a quiet prefix: leftovers from the previous
+            # verb are what make Windows Installer queue and the run hang.
+            self.stop_prefix_wine_processes(
+                env, reason=f"starting '{component}'"
+            )
+
             # Calculate base progress for this component (0.0 to 1.0 across all components)
             base_progress = idx / total_components
             component_progress_range = 1.0 / total_components
@@ -11956,17 +12309,10 @@ class AffinityInstallerGUI(QMainWindow):
 
             # Use streaming to show progress
             self.run_command_streaming(
-                [
-                    "winetricks",
-                    "--unattended",
-                    "--verbose",
-                    "--force",
-                    "--no-isolate",
-                    "--optout",
-                    component,
-                ],
+                self.build_winetricks_command(component),
                 env=env,
                 progress_callback=update_component_progress,
+                stall_timeout=1200,
             )
 
             # Mark this component as complete
@@ -12812,10 +13158,23 @@ Would you like to continue with {distro_name} anyway?"""
 
             self.log("Installing Wine components (this may take several minutes)...", "info")
 
+            # Clear out anything still holding the prefix (a wedged installer
+            # from a previous attempt, an abandoned winetricks, a wineserver
+            # from another Wine build) before Windows Installer is touched.
+            self.stop_prefix_wine_processes(
+                env, reason="winetricks needs an idle prefix"
+            )
+
             total_components = len(components)
             for idx, (component, description) in enumerate(components):
                 if self.check_cancelled():
                     return False
+
+                # Every verb starts from a quiet prefix: leftovers from the
+                # previous verb are what make Windows Installer queue and hang.
+                self.stop_prefix_wine_processes(
+                    env, reason=f"starting '{component}'"
+                )
 
                 base_progress = idx / total_components
                 component_progress_range = 1.0 / total_components
@@ -12825,20 +13184,27 @@ Would you like to continue with {distro_name} anyway?"""
                 self.log(f"Installing {description} ({component})... [{idx + 1}/{total_components}]", "info")
                 self.log("  (This may take several minutes - progress will be shown below)", "info")
 
-                command = ["winetricks", "--unattended", "--verbose", "--force", "--no-isolate", "--optout", component]
+                command = self.build_winetricks_command(component)
                 success = self.run_command_streaming(
                     command,
                     env=env,
-                    progress_callback=progress_callback
+                    progress_callback=progress_callback,
+                    stall_timeout=1200,
                 )
 
                 if not success and not self.check_cancelled():
                     self.log(f"{description} installation failed, retrying once...", "warning")
+                    # A failed run can leave a half-finished installer behind;
+                    # clear it out so the retry does not queue behind it.
+                    self.stop_prefix_wine_processes(
+                        env, reason="retrying after a failed/ stalled run"
+                    )
                     time.sleep(2)
                     success = self.run_command_streaming(
                         command,
                         env=env,
-                        progress_callback=progress_callback
+                        progress_callback=progress_callback,
+                        stall_timeout=1200,
                     )
 
                 self.update_progress(base_progress + component_progress_range)
