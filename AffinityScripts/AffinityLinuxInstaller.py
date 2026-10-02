@@ -25,6 +25,30 @@ import time
 import signal
 import shlex
 
+# Single source of truth for the winetricks components this installer sets up.
+# Order matters: .NET first (the runtimes and Affinity itself check against it),
+# then fonts and runtimes, then the rest. Keep in sync with
+# _check_winetricks_component().
+WINETRICKS_COMPONENTS = [
+    ("dotnet35sp1", ".NET Framework 3.5 SP1"),
+    ("dotnet48", ".NET Framework 4.8"),
+    ("corefonts", "Windows Core Fonts"),
+    ("vcrun2022", "Visual C++ Redistributables 2022"),
+    ("msxml3", "MSXML 3.0"),
+    ("msxml6", "MSXML 6.0"),
+    ("crypt32", "Cryptographic API 32"),
+    ("tahoma", "Tahoma Font"),
+    ("renderer=vulkan", "Vulkan Renderer"),
+]
+
+# Side column (Quick Start / Troubleshooting) sizing. The floor keeps a column
+# wide enough for its icon plus a few words of label; MIN_WINDOW_WIDTH is the
+# budget the floors are trimmed to so the log column and the gaps still fit and
+# the window never has to grow past it to avoid clipping (see _size_side_columns).
+SIDE_PANEL_MIN_WIDTH = 190
+SIDE_PANEL_MIN_FLOOR = 150
+MIN_WINDOW_WIDTH = 620
+
 
 def detect_distro_for_install():
     """Detect distribution for package installation"""
@@ -107,9 +131,10 @@ try:
         QLineEdit,
         QSizePolicy,
     )
-    from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
+    from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent
     from PyQt6.QtGui import (
         QFont,
+        QFontMetrics,
         QColor,
         QPalette,
         QIcon,
@@ -167,9 +192,10 @@ except ImportError:
                 QLineEdit,
                 QSizePolicy,
             )
-            from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
+            from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent
             from PyQt6.QtGui import (
                 QFont,
+                QFontMetrics,
                 QColor,
                 QPalette,
                 QIcon,
@@ -220,6 +246,160 @@ if not PYQT6_AVAILABLE:
     print("  Debian/Ubuntu/Mint/Pop/Zorin/PikaOS: sudo apt install python3-pyqt6")
     print("  openSUSE: sudo zypper install python313-PyQt6")
     sys.exit(1)
+
+
+class ElidedLabel(QLabel):
+    """QLabel that shrinks with its panel instead of forcing its text width.
+
+    The side columns sit next to the log pane, so on a narrow window there is
+    less room than the labels ask for. A normal QLabel demands its full text
+    width as a minimum, which pushes the column wider than its scroll area and
+    gets the text clipped mid-word. Reporting a zero-width minimum lets the
+    layout shrink us, and we show an ellipsis for whatever room is left.
+    """
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self._full_hint = super().sizeHint()
+
+    def text(self):
+        """The complete label - layout code gets the elided one, callers don't."""
+        return getattr(self, "_full_text", "")
+
+    def setText(self, text):
+        self._full_text = text
+        super().setText(text)
+        self._refresh_hint()
+        self._apply_elision()
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
+
+    def sizeHint(self):
+        # The preferred width still covers the whole label, so wide windows lay
+        # out exactly as they did before; only the minimum collapses to zero.
+        return getattr(self, "_full_hint", super().sizeHint())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elision()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._refresh_hint()
+            self._apply_elision()
+
+    def _refresh_hint(self):
+        """Re-measure the whole label with the font/style currently in effect."""
+        full = getattr(self, "_full_text", None)
+        if full is None:
+            return
+        current = super().text()
+        super().setText(full)
+        try:
+            self._full_hint = super().sizeHint()
+        finally:
+            super().setText(current)
+
+    def _apply_elision(self):
+        full = getattr(self, "_full_text", "")
+        if not full or self.width() <= 0:
+            return
+        shown = QFontMetrics(self.font()).elidedText(
+            full, Qt.TextElideMode.ElideRight, max(0, self.width() - 4)
+        )
+        if shown != super().text():
+            super().setText(shown)
+
+
+class ElidedActionButton(QPushButton):
+    """QPushButton that shrinks with its panel and ellipsizes its label.
+
+    Qt never elides button text on its own - it clips it - and the full text
+    width becomes the panel's minimum, which is what used to cut these buttons
+    off when the window was resized narrow. Same contract as ElidedLabel: the
+    minimum collapses, the preferred width keeps describing the whole label,
+    and text() keeps returning the unabbreviated label for callers that logic on.
+    """
+
+    # 12px + 24px of padding and a 1px border per side, from every #actionButton
+    # rule in the stylesheets, plus a little slack for font/padding rounding.
+    _TEXT_CHROME = 58
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self._full_hint = super().sizeHint()
+
+    def text(self):
+        """The complete label - layout code gets the elided one, callers don't."""
+        return getattr(self, "_full_text", "")
+
+    def setText(self, text):
+        previous = getattr(self, "_full_text", None)
+        self._full_text = text
+        super().setText(text)
+        self._refresh_hint()
+        if previous is not None and self.toolTip() == previous:
+            # The tooltip was mirroring the label (set because the label can be
+            # abbreviated); keep it accurate when the label itself changes.
+            self.setToolTip(text)
+        self._apply_elision()
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
+
+    def sizeHint(self):
+        return getattr(self, "_full_hint", super().sizeHint())
+
+    def setIcon(self, icon):
+        super().setIcon(icon)
+        self._apply_elision()
+
+    def setIconSize(self, size):
+        super().setIconSize(size)
+        self._apply_elision()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elision()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._refresh_hint()
+            self._apply_elision()
+
+    def _refresh_hint(self):
+        """Re-measure the whole label with the font/style currently in effect."""
+        full = getattr(self, "_full_text", None)
+        if full is None:
+            return
+        current = super().text()
+        super().setText(full)
+        try:
+            self._full_hint = super().sizeHint()
+        finally:
+            super().setText(current)
+
+    def _apply_elision(self):
+        full = getattr(self, "_full_text", "")
+        if not full or self.width() <= 0:
+            return
+        icon_width = 0
+        if not self.icon().isNull():
+            icon_width = self.iconSize().width() + 8  # icon plus the gap to the text
+        shown = QFontMetrics(self.font()).elidedText(
+            full,
+            Qt.TextElideMode.ElideRight,
+            max(0, self.width() - icon_width - self._TEXT_CHROME),
+        )
+        if shown != super().text():
+            super().setText(shown)
 
 
 class ZoomableTextEdit(QTextEdit):
@@ -384,6 +564,12 @@ class AffinityInstallerGUI(QMainWindow):
         self.cancel_event = threading.Event()
         self._process_lock = threading.Lock()
         self._active_processes = set()
+        # Winetricks verbs that already stalled once this session: a wedged
+        # ngen.exe wedges again, so we must not blindly retry them.
+        self._stalled_components = set()
+        # Log lines waiting to be painted (see _flush_log_queue).
+        self._log_queue = []
+        self._log_queue_lock = threading.Lock()
         self._button_spinner_map = {}
         self._last_clicked_button = None
         self._operation_button = None
@@ -674,14 +860,11 @@ class AffinityInstallerGUI(QMainWindow):
             env["WINEPREFIX"] = self.directory
             wine = self.get_wine_path("wine")
 
+            # renderer=vulkan has its own dedicated check below.
             winetricks_components = [
-                ("dotnet35sp1", ".NET Framework 3.5 SP1"),
-                ("dotnet48", ".NET Framework 4.8"),
-                ("corefonts", "Windows Core Fonts"),
-                ("vcrun2022", "Visual C++ Redistributables 2022"),
-                ("msxml3", "MSXML 3.0"),
-                ("msxml6", "MSXML 6.0"),
-                ("crypt32", "Cryptographic API 32"),
+                (component, description)
+                for component, description in WINETRICKS_COMPONENTS
+                if component != "renderer=vulkan"
             ]
 
             for component, description in winetricks_components:
@@ -1447,6 +1630,9 @@ class AffinityInstallerGUI(QMainWindow):
         else:
             self._apply_mattscreative_theme()
         self._update_section_titles()
+        # Fonts/padding just changed (and the titles were re-cased), so the
+        # columns' real minimum width is known now - re-assert it.
+        self._refresh_window_minimum_width()
 
     def _apply_dark_theme(self):
         """Apply modern dark theme with card-based design"""
@@ -2402,6 +2588,51 @@ class AffinityInstallerGUI(QMainWindow):
                 font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 100)
             label.setFont(font)
 
+    def _size_side_columns(self, content_layout, status_panel, side_panels):
+        """Give the side button columns a minimum width inside a fixed budget.
+
+        Each column needs room for its icon plus a few words of label; the rest
+        of MIN_WINDOW_WIDTH is left for the log column and the gaps. The floors
+        matter because Qt clips layout items it cannot fit rather than scrolling
+        them, so a column that asks for its full text width (or a log column
+        whose minimum grew with a long status line) would otherwise push the
+        window wider than it is allowed to be.
+        """
+        try:
+            margins = content_layout.contentsMargins()
+            gaps = margins.left() + margins.right()
+            # one gap per side column: 2 side columns -> 3 columns -> 2 gaps
+            gaps += content_layout.spacing() * len(side_panels)
+            status_layout = status_panel.layout() if status_panel is not None else None
+            status_min = status_layout.minimumSize().width() if status_layout else 0
+            budget = MIN_WINDOW_WIDTH - gaps - status_min
+            floor = max(
+                SIDE_PANEL_MIN_FLOOR,
+                min(SIDE_PANEL_MIN_WIDTH, budget // max(1, len(side_panels))),
+            )
+        except Exception:
+            floor = SIDE_PANEL_MIN_WIDTH
+        for scroll in side_panels:
+            scroll.setMinimumWidth(floor)
+
+    def _refresh_window_minimum_width(self):
+        """Keep the window from being squeezed narrower than its columns need.
+
+        Qt honours a top-level minimum on resize but does not raise it when the
+        content grows, so without this the layout ends up asking for more room
+        than the window has and the buttons clip instead of scrolling/eliding.
+        """
+        try:
+            central = self.centralWidget()
+            layout = central.layout() if central is not None else None
+            if layout is None:
+                return
+            minimum = layout.minimumSize().width()
+            if minimum > 0:
+                self.setMinimumWidth(minimum)
+        except Exception:
+            pass
+
     def create_ui(self):
         """Create the modern user interface"""
         central_widget = QWidget()
@@ -2547,7 +2778,6 @@ class AffinityInstallerGUI(QMainWindow):
 
         left_panel = self.create_button_sections()
         left_scroll.setWidget(left_panel)
-        left_scroll.setMinimumWidth(left_panel.minimumSizeHint().width() + 18)
         left_scroll.setMaximumWidth(right_panel_max)
 
         content_layout.addWidget(left_scroll, stretch=2)
@@ -2568,12 +2798,14 @@ class AffinityInstallerGUI(QMainWindow):
 
         right_panel = self.create_troubleshooting_sections()
         right_scroll.setWidget(right_panel)
-        right_scroll.setMinimumWidth(right_panel.minimumSizeHint().width() + 18)
         right_scroll.setMaximumWidth(right_panel_max)
 
         content_layout.addWidget(right_scroll, stretch=2)
 
         main_layout.addWidget(content_widget, stretch=1)
+
+        self._size_side_columns(content_layout, status_panel, (left_scroll, right_scroll))
+        self._refresh_window_minimum_width()
 
     def create_status_section(self):
         """Create the modern status/log output section (responsive)"""
@@ -2616,6 +2848,11 @@ class AffinityInstallerGUI(QMainWindow):
         self.progress_label = QLabel("Ready")
         self.progress_label.setObjectName("progressLabel")
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Status lines are long ("Wine environment ready. Configure your
+        # distribution below."). A single-line label would demand its full text
+        # width as a minimum and drag the whole window's minimum width up with
+        # it; wrapping keeps the log column's footprint stable.
+        self.progress_label.setWordWrap(True)
         progress_layout.addWidget(self.progress_label)
 
         progress_container = QHBoxLayout()
@@ -2713,6 +2950,16 @@ class AffinityInstallerGUI(QMainWindow):
         else:
             self.log_text.setMinimumHeight(200)
         log_layout.addWidget(self.log_text)
+
+        # The log pane used to grow without bound: a --verbose winetricks run
+        # pushes thousands of lines, and painting one HTML block per message was
+        # what made the GUI crawl. Cap what we keep on screen and paint in
+        # batches every 100 ms (see _log_safe / _flush_log_queue).
+        self.log_text.document().setMaximumBlockCount(5000)
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.setInterval(100)
+        self._log_flush_timer.timeout.connect(self._flush_log_queue)
+        self._log_flush_timer.start()
 
         card_layout.addWidget(log_section)
 
@@ -3013,7 +3260,7 @@ class AffinityInstallerGUI(QMainWindow):
         card_layout.setSpacing(card_spacing)
         card_layout.setContentsMargins(card_margin, 16, card_margin, card_margin)
 
-        title_label = QLabel(title)
+        title_label = ElidedLabel(title)
         title_label.setObjectName("sectionTitle")
         self._section_title_labels.append((title_label, title))
         if screen_width < 1024:
@@ -3045,7 +3292,7 @@ class AffinityInstallerGUI(QMainWindow):
             else:
                 text, command = button_data[0], button_data[1]
 
-            btn = QPushButton(text)
+            btn = ElidedActionButton(text)
             btn.setObjectName("actionButton")
 
             if text == "One-Click Full Setup":
@@ -3067,6 +3314,10 @@ class AffinityInstallerGUI(QMainWindow):
 
             if tooltip:
                 btn.setToolTip(tooltip)
+            else:
+                # The label can be abbreviated when the window is narrow
+                # (see ElidedActionButton); keep the full text reachable.
+                btn.setToolTip(text)
 
             btn.setMinimumHeight(button_height)
             btn.setSizePolicy(
@@ -3232,7 +3483,40 @@ class AffinityInstallerGUI(QMainWindow):
         threading.Thread(target=check_and_load_icon, daemon=True).start()
 
     def closeEvent(self, event):
-        """Handle window close event - close log file"""
+        """Handle window close event - stop children, flush log, close file"""
+        if self.operation_in_progress:
+            reply = QMessageBox.question(
+                self,
+                "Operation In Progress",
+                f"'{self.current_operation or 'Unknown'}' is still running.\n\n"
+                "Quit anyway and stop the running process(es)?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+
+            # Worker threads are daemons and every child gets its own session,
+            # so without this a quit orphans winetricks/wine — exactly what
+            # wedges the next run.
+            self.operation_cancelled = True
+            self.cancel_event.set()
+            try:
+                self.terminate_active_processes()
+            except Exception:
+                pass
+            try:
+                self.stop_prefix_wine_processes(
+                    reason="installer is closing", wait_seconds=5, force=True
+                )
+            except Exception:
+                pass
+
+        try:
+            self._flush_log_queue()
+        except Exception:
+            pass
         if self.log_file:
             try:
                 log_footer = f"{'=' * 80}\n"
@@ -3406,10 +3690,11 @@ class AffinityInstallerGUI(QMainWindow):
         else:
             full_message = f'<div style="padding: 2px 4px; margin: 1px 0;">{timestamp_html} {icon_html} <span style="color: {color};">{message}</span></div>'
 
-        self.log_text.append(full_message)
-        self.log_text.verticalScrollBar().setValue(
-            self.log_text.verticalScrollBar().maximum()
-        )
+        # Queue instead of painting: one QTextEdit append + relayout per message
+        # is what made verbose winetricks runs crawl. _flush_log_queue paints
+        # them in batches; the file still receives every line immediately.
+        with self._log_queue_lock:
+            self._log_queue.append(full_message)
 
         if self.log_file:
             try:
@@ -3418,6 +3703,24 @@ class AffinityInstallerGUI(QMainWindow):
                 self.log_file.flush()
             except Exception:
                 pass
+
+    def _flush_log_queue(self):
+        """Paint every queued log line in one batch (GUI thread, 10 Hz)."""
+        try:
+            with self._log_queue_lock:
+                if not self._log_queue:
+                    return
+                batch = "\n".join(self._log_queue)
+                self._log_queue.clear()
+        except Exception:
+            return
+        try:
+            self.log_text.append(batch)
+            self.log_text.verticalScrollBar().setValue(
+                self.log_text.verticalScrollBar().maximum()
+            )
+        except Exception:
+            pass
 
     def update_progress(self, value):
         """Update progress bar (thread-safe via signal)"""
@@ -3455,6 +3758,17 @@ class AffinityInstallerGUI(QMainWindow):
                 self.terminate_active_processes()
             except Exception:
                 pass
+            # Killing the winetricks process group still leaves wineserver and
+            # its children behind; sweep them up off the GUI thread.
+            threading.Thread(
+                target=self.stop_prefix_wine_processes,
+                kwargs={
+                    "reason": "operation cancelled",
+                    "wait_seconds": 10,
+                    "force": True,
+                },
+                daemon=True,
+            ).start()
             self.log(
                 "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
                 "warning",
@@ -5559,14 +5873,20 @@ class AffinityInstallerGUI(QMainWindow):
             pids.append(pid)
         return pids
 
-    def stop_prefix_wine_processes(self, env=None, reason=""):
+    def stop_prefix_wine_processes(
+        self, env=None, reason="", wait_seconds=20, force=False
+    ):
         """Stop every process still running against our WINEPREFIX.
 
         Left-over Wine work — a wedged .NET installer, an abandoned winetricks
         run, a wineserver started by a different Wine build — keeps Windows
         Installer busy, so the next winetricks run blocks forever waiting for a
-        lock nobody will release. Returns True when the prefix is quiet."""
-        if self.cancel_event.is_set():
+        lock nobody will release. Returns True when the prefix is quiet.
+
+        `force=True` runs even after the user cancelled (the cancel/close paths
+        must clean up on their way out); `wait_seconds` keeps short-lived calls
+        off the GUI thread for long."""
+        if not force and self.cancel_event.is_set():
             return False
 
         pids = self._prefix_wine_pids()
@@ -5605,7 +5925,7 @@ class AffinityInstallerGUI(QMainWindow):
                     env=run_env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=30,
+                    timeout=min(30, max(3, wait_seconds)),
                     check=False,
                 )
             except Exception:
@@ -5613,9 +5933,9 @@ class AffinityInstallerGUI(QMainWindow):
 
         # 3. Wait for them to leave, then force whatever is left
         remaining = list(pids)
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + max(1, wait_seconds)
         while remaining and time.monotonic() < deadline:
-            if self.cancel_event.is_set():
+            if not force and self.cancel_event.is_set():
                 return False
             time.sleep(0.5)
             remaining = [
@@ -5659,7 +5979,11 @@ class AffinityInstallerGUI(QMainWindow):
                 "warning"
             )
             self.log(f"Backing it up to {backup_dir} so setup can continue from a clean prefix.", "info")
-            self.run_command(["wineserver", "-k"], check=False)
+            # Nothing may still be running inside the prefix we are about to move:
+            # a live wineserver keeps writing files under it mid-copy.
+            self.stop_prefix_wine_processes(
+                reason="backing up an incomplete prefix", wait_seconds=8
+            )
             shutil.move(str(prefix_dir), str(backup_dir))
             prefix_dir.mkdir(parents=True, exist_ok=True)
             self.log("Incomplete Wine prefix backed up", "success")
@@ -5760,8 +6084,16 @@ class AffinityInstallerGUI(QMainWindow):
         except Exception:
             pass
 
-    def run_command(self, command, check=True, shell=False, capture=True, env=None):
-        """Execute shell command with GUI sudo password support and cancellation."""
+    def run_command(
+        self, command, check=True, shell=False, capture=True, env=None, timeout=None
+    ):
+        """Execute shell command with GUI sudo password support and cancellation.
+
+        `timeout` is a hard deadline (seconds): the polling loops below check it
+        along with cancel_event, so a wedged command can no longer freeze the GUI
+        forever. Defaults to AFFINITY_STALL_TIMEOUT (30 min), or 1 h for sudo —
+        package installs are allowed to run long."""
+        proc = None
         try:
             # Convert command to list if it's a string
             if isinstance(command, str) and not shell:
@@ -5791,6 +6123,16 @@ class AffinityInstallerGUI(QMainWindow):
             # This prevents errors when askpass programs (like ksshaskpass) don't exist
             if is_sudo:
                 env.pop("SUDO_ASKPASS", None)  # Remove SUDO_ASKPASS if it exists
+
+            # Hard deadline for this command (see docstring).
+            if timeout is None:
+                timeout = 3600 if is_sudo else self.get_stall_timeout()
+            deadline = (time.monotonic() + timeout) if timeout else None
+            cmd_display = (
+                " ".join(str(c) for c in command[:6])
+                if isinstance(command, list)
+                else str(command)[:80]
+            )
 
             if is_sudo:
                 # Get password if needed
@@ -5843,144 +6185,61 @@ class AffinityInstallerGUI(QMainWindow):
                     stdout=subprocess.PIPE if capture else None,
                     stderr=subprocess.PIPE if capture else None,
                     text=True,
+                    errors="replace",  # never die on undecodable output
                     env=env,  # Use the modified env that has SUDO_ASKPASS removed
                     preexec_fn=os.setsid,
                 )
                 self._register_process(proc)
                 try:
-                    # Send password to sudo via stdin using communicate() which handles stdin properly
+                    # Hand the password over and close stdin right away, so the
+                    # loop below stays free to poll for cancellation and the
+                    # deadline (one blocking communicate() made Cancel a no-op).
                     password_input = f"{self.sudo_password}\n"
+                    try:
+                        proc.stdin.write(password_input)
+                        proc.stdin.close()
+                    except Exception:
+                        pass
 
-                    if capture:
-                        stdout_acc = ""
-                        stderr_acc = ""
-                        # Read output without timeout for long-running commands like package installation
-                        try:
-                            # Use communicate with input - this is the safest way
-                            out, err = proc.communicate(
-                                input=password_input, timeout=None
+                    stdout_acc = ""
+                    stderr_acc = ""
+                    while True:
+                        if self.cancel_event.is_set():
+                            self._terminate_process(proc)
+                            return False, stdout_acc, "Cancelled"
+                        if deadline is not None and time.monotonic() >= deadline:
+                            display = (
+                                " ".join(str(c) for c in command[:6])
+                                if isinstance(command, list)
+                                else str(command)[:80]
                             )
+                            self.log(
+                                f"Command timed out after {timeout}s: {display}",
+                                "error",
+                            )
+                            self._terminate_process(proc)
+                            return False, stdout_acc, f"Timed out after {timeout}s"
+                        try:
+                            out, err = proc.communicate(timeout=0.2)
+                        except subprocess.TimeoutExpired:
+                            continue
+                        except Exception as e:
+                            # Decode/closed-pipe race: the command itself may
+                            # still have succeeded, so trust its exit status.
+                            error_msg = str(e)
+                            if proc.poll() is None:
+                                self._terminate_process(proc)
+                            if proc.returncode == 0:
+                                return True, stdout_acc, stderr_acc
+                            self.log(
+                                f"Error during command execution ({type(e).__name__}): {error_msg}",
+                                "error",
+                            )
+                            return False, stdout_acc, error_msg
+                        if capture:
                             stdout_acc += out or ""
                             stderr_acc += err or ""
-                        except subprocess.TimeoutExpired:
-                            # This shouldn't happen with timeout=None, but handle it just in case
-                            if self.cancel_event.is_set():
-                                self._terminate_process(proc)
-                                return False, stdout_acc, "Cancelled"
-                            # Force read remaining output
-                            try:
-                                out, err = proc.communicate()
-                                stdout_acc += out or ""
-                                stderr_acc += err or ""
-                            except Exception:
-                                pass
-                        except Exception as e:
-                            # Catch all exceptions including "I/O operation on closed file"
-                            error_msg = str(e)
-                            error_type = type(e).__name__
-
-                            # Check if process completed successfully despite the error
-                            try:
-                                if proc.poll() is None:
-                                    # Process still running, wait a bit
-                                    proc.wait(timeout=2)
-                            except Exception:
-                                pass
-
-                            # If return code is 0, the operation succeeded despite the exception
-                            if proc.returncode == 0:
-                                # Try to read any remaining output
-                                try:
-                                    if proc.stdout and not proc.stdout.closed:
-                                        remaining = proc.stdout.read()
-                                        if remaining:
-                                            stdout_acc += remaining
-                                except Exception:
-                                    pass
-                                try:
-                                    if proc.stderr and not proc.stderr.closed:
-                                        remaining = proc.stderr.read()
-                                        if remaining:
-                                            stderr_acc += remaining
-                                except Exception:
-                                    pass
-                                # Operation succeeded, return success
-                                return True, stdout_acc, stderr_acc
-
-                            # Only report error if return code indicates failure
-                            if (
-                                "closed file" in error_msg.lower()
-                                or "I/O operation" in error_msg
-                            ):
-                                # This is often a harmless error if the process succeeded
-                                if proc.returncode == 0:
-                                    return True, stdout_acc, stderr_acc
-                                # If it failed, log it
-                                self.log(
-                                    f"Error during command execution ({error_type}): {error_msg}",
-                                    "error",
-                                )
-                            else:
-                                self.log(
-                                    f"Error during command execution ({error_type}): {error_msg}",
-                                    "error",
-                                )
-
-                            self._terminate_process(proc)
-                            return False, stdout_acc, stderr_acc or error_msg
-
-                        success = proc.returncode == 0
-                        return success, stdout_acc, stderr_acc
-                    else:
-                        # No capture: send password and wait for completion
-                        try:
-                            proc.communicate(input=password_input, timeout=None)
-                        except Exception as e:
-                            # Catch all exceptions including "I/O operation on closed file"
-                            error_msg = str(e)
-
-                            # Check if process completed successfully despite the error
-                            try:
-                                if proc.poll() is None:
-                                    proc.wait(timeout=2)
-                            except Exception:
-                                pass
-
-                            # If return code is 0, operation succeeded despite the exception
-                            if proc.returncode == 0:
-                                return True, "", ""
-
-                            # Only report error if return code indicates failure
-                            if (
-                                "closed file" in error_msg.lower()
-                                or "I/O operation" in error_msg
-                            ):
-                                # This is often a harmless error if the process succeeded
-                                if proc.returncode == 0:
-                                    return True, "", ""
-                                # If it failed, log it
-                                self.log(
-                                    f"Error during command execution: {error_msg}",
-                                    "error",
-                                )
-                            else:
-                                self.log(
-                                    f"Error during command execution: {error_msg}",
-                                    "error",
-                                )
-
-                            self._terminate_process(proc)
-                            return False, "", error_msg
-                        except subprocess.TimeoutExpired:
-                            # This shouldn't happen with timeout=None, but handle it just in case
-                            if self.cancel_event.is_set():
-                                self._terminate_process(proc)
-                                return False, "", "Cancelled"
-                            try:
-                                proc.communicate()
-                            except Exception:
-                                pass
-                        return proc.returncode == 0, "", ""
+                        return proc.returncode == 0, stdout_acc, stderr_acc
                 finally:
                     self._unregister_process(proc)
             else:
@@ -5993,6 +6252,7 @@ class AffinityInstallerGUI(QMainWindow):
                     stdout=subprocess.PIPE if capture else None,
                     stderr=subprocess.PIPE if capture else None,
                     text=capture,
+                    errors="replace" if capture else None,  # never die on undecodable output
                     env=env if env else os.environ.copy(),
                     preexec_fn=os.setsid,
                 )
@@ -6002,16 +6262,39 @@ class AffinityInstallerGUI(QMainWindow):
                         stdout_acc = ""
                         stderr_acc = ""
                         while True:
+                            if deadline is not None and time.monotonic() >= deadline:
+                                self._terminate_process(proc)
+                                self.log(
+                                    f"Command timed out after {timeout}s: {cmd_display}",
+                                    "error",
+                                )
+                                return (
+                                    False,
+                                    stdout_acc,
+                                    f"Timed out after {timeout}s",
+                                )
                             try:
-                                out, err = proc.communicate(timeout=0.1)
-                                stdout_acc += out or ""
-                                stderr_acc += err or ""
-                                break
+                                out, err = proc.communicate(timeout=0.2)
                             except subprocess.TimeoutExpired:
                                 if self.cancel_event.is_set():
                                     self._terminate_process(proc)
                                     return False, stdout_acc, "Cancelled"
                                 continue
+                            except Exception as e:
+                                # Decode/closed-pipe race: trust the exit status.
+                                error_msg = str(e)
+                                if proc.poll() is None:
+                                    self._terminate_process(proc)
+                                if proc.returncode == 0:
+                                    return True, stdout_acc, stderr_acc
+                                self.log(
+                                    f"Error during command execution ({type(e).__name__}): {error_msg}",
+                                    "error",
+                                )
+                                return False, stdout_acc, error_msg
+                            stdout_acc += out or ""
+                            stderr_acc += err or ""
+                            break
                         success = proc.returncode == 0
                         return success, stdout_acc, stderr_acc
                     else:
@@ -6019,6 +6302,13 @@ class AffinityInstallerGUI(QMainWindow):
                             if self.cancel_event.is_set():
                                 self._terminate_process(proc)
                                 return False, "", "Cancelled"
+                            if deadline is not None and time.monotonic() >= deadline:
+                                self._terminate_process(proc)
+                                self.log(
+                                    f"Command timed out after {timeout}s: {cmd_display}",
+                                    "error",
+                                )
+                                return False, "", f"Timed out after {timeout}s"
                             if proc.poll() is not None:
                                 break
                             time.sleep(0.1)
@@ -6026,6 +6316,13 @@ class AffinityInstallerGUI(QMainWindow):
                 finally:
                     self._unregister_process(proc)
         except Exception as e:
+            # Never leave the child behind: an orphaned wine/winecfg process is
+            # what makes the *next* run queue up and hang.
+            try:
+                if proc is not None:
+                    self._terminate_process(proc)
+            except Exception:
+                pass
             return False, "", str(e)
 
     @staticmethod
@@ -6076,6 +6373,7 @@ class AffinityInstallerGUI(QMainWindow):
         for post-run heuristics.
         """
         self._last_stream_output_text = ""
+        self._last_command_stalled = False
         if stall_timeout is None:
             stall_timeout = self.get_stall_timeout()
         if isinstance(command, str):
@@ -6139,6 +6437,7 @@ class AffinityInstallerGUI(QMainWindow):
                 except queue.Empty:
                     idle = time.monotonic() - last_output
                     if idle >= stall_timeout:
+                        self._last_command_stalled = True
                         self.log(
                             f"  ✗ No output from '{display_cmd}' for {int(idle)}s — "
                             "assuming it is stuck and stopping it.",
@@ -6333,6 +6632,8 @@ class AffinityInstallerGUI(QMainWindow):
         is_webview2 = "webview" in installer_name or "edge" in installer_name
 
         # Set Windows 11 before installing Affinity
+        # (clear leftovers first: a wedged process would make winecfg queue)
+        self.stop_prefix_wine_processes(env, reason="launching an installer")
         if is_affinity_v3 or is_affinity_v2:
             self.log(
                 "Setting Windows version to 11 before Affinity installation...", "info"
@@ -12253,17 +12554,7 @@ class AffinityInstallerGUI(QMainWindow):
 
         wine_cfg = self.get_wine_path("winecfg")
 
-        components = [
-            "dotnet35sp1",
-            "dotnet48",
-            "corefonts",
-            "vcrun2022",
-            "msxml3",
-            "msxml6",
-            "tahoma",
-            "renderer=vulkan",
-            "crypt32",
-        ]
+        components = [component for component, _ in WINETRICKS_COMPONENTS]
 
         # Clear out anything still holding the prefix (a wedged installer from a
         # previous attempt, an abandoned winetricks, a wineserver from another
@@ -12308,18 +12599,34 @@ class AffinityInstallerGUI(QMainWindow):
                 self.update_progress(overall_progress)
 
             # Use streaming to show progress
-            self.run_command_streaming(
+            component_ok = self.run_command_streaming(
                 self.build_winetricks_command(component),
                 env=env,
                 progress_callback=update_component_progress,
                 stall_timeout=1200,
             )
+            if not component_ok and not self.cancel_event.is_set():
+                if self._last_command_stalled:
+                    self._stalled_components.add(component)
+                    self.log(
+                        f"'{component}' stalled — Wine stopped responding and was stopped.",
+                        "error",
+                    )
+                    self.log(
+                        "If this repeats, re-run Wine setup with Wine 10.10 (Wine 11+ new WoW64 hangs winetricks).",
+                        "warning",
+                    )
+                else:
+                    self.log(f"'{component}' failed — continuing with the rest", "warning")
 
             # Mark this component as complete
             self.update_progress(base_progress + component_progress_range)
 
         # Set Windows version to 11
         self.log("Setting Windows version to 11...", "info")
+        # A leftover process would make winecfg queue behind it (or talk to a
+        # wineserver belonging to a different Wine build).
+        self.stop_prefix_wine_processes(env, reason="setting Windows version")
         self.run_command([str(wine_cfg), "-v", "win11"], check=False, env=env)
 
         # Apply dark theme
@@ -13136,17 +13443,7 @@ Would you like to continue with {distro_name} anyway?"""
 
             env = self.get_winetricks_env()
             wine_cfg = self.get_wine_path("winecfg")
-            components = [
-                ("dotnet35sp1", ".NET Framework 3.5 SP1"),
-                ("dotnet48", ".NET Framework 4.8"),
-                ("corefonts", "Windows Core Fonts"),
-                ("vcrun2022", "Visual C++ Redistributables 2022"),
-                ("msxml3", "MSXML 3.0"),
-                ("msxml6", "MSXML 6.0"),
-                ("crypt32", "Cryptographic API 32"),
-                ("tahoma", "Tahoma Font"),
-                ("renderer=vulkan", "Vulkan Renderer"),
-            ]
+            components = list(WINETRICKS_COMPONENTS)
 
             had_failures = False
 
@@ -13192,20 +13489,41 @@ Would you like to continue with {distro_name} anyway?"""
                     stall_timeout=1200,
                 )
 
+                stalled = self._last_command_stalled
                 if not success and not self.check_cancelled():
-                    self.log(f"{description} installation failed, retrying once...", "warning")
-                    # A failed run can leave a half-finished installer behind;
-                    # clear it out so the retry does not queue behind it.
-                    self.stop_prefix_wine_processes(
-                        env, reason="retrying after a failed/ stalled run"
-                    )
-                    time.sleep(2)
-                    success = self.run_command_streaming(
-                        command,
-                        env=env,
-                        progress_callback=progress_callback,
-                        stall_timeout=1200,
-                    )
+                    if stalled and component in self._stalled_components:
+                        # Second stall of the same verb: another attempt would
+                        # just burn another 20 minutes on the same deadlock.
+                        self.log(
+                            f"{description} stalled twice in a row — not retrying it.",
+                            "error",
+                        )
+                        self.log(
+                            "This is the known Wine 11+ new WoW64 hang: the 64-bit ngen.exe never returns.",
+                            "info",
+                        )
+                        self.log(
+                            "Close the installer, re-run Wine setup with Wine 10.10, then try again.",
+                            "warning",
+                        )
+                    else:
+                        if stalled:
+                            self._stalled_components.add(component)
+                        self.log(f"{description} installation failed, retrying once...", "warning")
+                        # A failed run can leave a half-finished installer behind;
+                        # clear it out so the retry does not queue behind it.
+                        self.stop_prefix_wine_processes(
+                            env, reason="retrying after a failed/stalled run"
+                        )
+                        time.sleep(2)
+                        success = self.run_command_streaming(
+                            command,
+                            env=env,
+                            progress_callback=progress_callback,
+                            stall_timeout=1200,
+                        )
+                        if not success and self._last_command_stalled:
+                            self._stalled_components.add(component)
 
                 self.update_progress(base_progress + component_progress_range)
 
@@ -13225,6 +13543,7 @@ Would you like to continue with {distro_name} anyway?"""
                 return False
 
             self.log("Setting Windows version to 11...", "info")
+            self.stop_prefix_wine_processes(env, reason="setting Windows version")
             self.run_command([str(wine_cfg), "-v", "win11"], check=False, env=env)
 
             self.log("Applying Wine dark theme...", "info")
@@ -13980,6 +14299,7 @@ Would you like to continue with {distro_name} anyway?"""
         try:
             # Step 1: Set Windows 11 compatibility mode
             self.log("Setting Windows 11 compatibility mode...", "info")
+            self.stop_prefix_wine_processes(env, reason="setting Windows version")
             self.run_command([str(wine_cfg), "-v", "win11"], check=False, env=env)
             self.log("Windows 11 compatibility mode set", "success")
 
@@ -14037,6 +14357,9 @@ Would you like to continue with {distro_name} anyway?"""
                 self.log(f"Error installing WebView2 Runtime: {e}", "error")
             # Try to restore Windows 11 compatibility even if something failed
             try:
+                self.stop_prefix_wine_processes(
+                    env, reason="restoring Windows version"
+                )
                 self.run_command([str(wine_cfg), "-v", "win11"], check=False, env=env)
             except:
                 pass
@@ -14523,6 +14846,9 @@ Would you like to continue with {distro_name} anyway?"""
 
             env = os.environ.copy()
             env["WINEPREFIX"] = self.directory
+            self.stop_prefix_wine_processes(
+                env, reason="launching the Affinity installer"
+            )
             self.run_command([str(wine_cfg), "-v", "win11"], check=False, env=env)
 
             # Run installer
@@ -14855,6 +15181,9 @@ Would you like to continue with {distro_name} anyway?"""
 
             # Use regular Wine for all installations (wine-tkg is only for winetricks)
             wine_cfg = self.get_wine_path("winecfg")
+            self.stop_prefix_wine_processes(
+                env, reason="running the updater"
+            )
             self.run_command([str(wine_cfg), "-v", "win11"], check=False, env=env)
 
             env["WINEDEBUG"] = "-all"
@@ -15137,11 +15466,18 @@ Would you like to continue with {distro_name} anyway?"""
                 ],
                 check=False,
                 env=env,
+                timeout=3600,  # a big MSI install legitimately runs for a while
             )
             if not success:
                 self.log(f"msiexec did not succeed, see {msi_log}", "warning")
             self.log("Waiting for Wine processes to finish...", "info")
-            self.run_command([str(self.get_wine_path("wineserver")), "-w"], check=False, env=env)
+            # Bounded: a leftover process would otherwise block here forever.
+            self.run_command(
+                [str(self.get_wine_path("wineserver")), "-w"],
+                check=False,
+                env=env,
+                timeout=600,
+            )
 
         if self.affinity_v3_exe_path().exists():
             self.log("Affinity installed from its MSI package", "success")
@@ -15221,6 +15557,9 @@ Would you like to continue with {distro_name} anyway?"""
 
             env = os.environ.copy()
             env["WINEPREFIX"] = self.directory
+            self.stop_prefix_wine_processes(
+                env, reason="launching the installer"
+            )
             self.run_command([str(wine_cfg), "-v", "win11"], check=False, env=env)
 
             # Run installer
@@ -18275,6 +18614,7 @@ Would you like to continue with {distro_name} anyway?"""
         env = self.get_winetricks_env(env)
         # Set Windows version to 11
         self.log("Setting Windows version to 11...", "info")
+        self.stop_prefix_wine_processes(env, reason="setting Windows version")
         success, _, _ = self.run_command(
             [str(wine_cfg), "-v", "win11"], check=False, env=env
         )
@@ -19360,12 +19700,14 @@ Would you like to continue with {distro_name} anyway?"""
             self.log("Uninstall cancelled by user", "warning")
             return
 
-        # Stop Wine processes first
+        # Stop Wine processes first. `wineserver -k` alone leaves msiexec and
+        # setup.exe behind, and those hold files open while we delete them.
         self.log("Stopping Wine processes...", "info")
         try:
-            self.run_command(["wineserver", "-k"], check=False)
-            time.sleep(2)
-            self.log("Wine processes stopped", "success")
+            if self.stop_prefix_wine_processes(reason="uninstalling", wait_seconds=8):
+                self.log("Wine processes stopped", "success")
+            else:
+                self.log("Warning: some Wine processes may still be running", "warning")
         except Exception as e:
             self.log(f"Warning: Could not stop all Wine processes: {e}", "warning")
 
@@ -19452,7 +19794,11 @@ Would you like to continue with {distro_name} anyway?"""
                     "Standard removal incomplete, falling back to rm -rf...", "warning"
                 )
                 result = subprocess.run(
-                    ["rm", "-rf", str(affinity_dir)], capture_output=True, text=True
+                    ["rm", "-rf", str(affinity_dir)],
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=600,
                 )
                 if result.returncode != 0:
                     raise Exception(f"rm -rf failed: {result.stderr.strip()}")
@@ -20463,34 +20809,89 @@ Would you like to continue with {distro_name} anyway?"""
         thanks.exec()
 
 
-def kill_stalled_wine_processes():
-    """Kill winetricks, winedevice.exe, and wineserver processes so the installer
-    starts cleanly. Only run when the GUI opens - leftover Wine processes (especially
-    a stalled winetricks) cause lockups if the installer starts on top of them."""
-    targets = [
-        ("winetricks", ["winetricks"]),
-        ("winedevice.exe", ["winedevice.exe", "winedevice"]),
-        ("wineserver", ["wineserver"]),
-    ]
+def kill_stalled_wine_processes(owned_marker=".AffinityLinux", target_names=None):
+    """Kill leftover winetricks / wineserver / winedevice processes so the
+    installer starts cleanly. Leftovers (especially a stalled winetricks) are
+    what cause lockups when the installer starts on top of them.
+
+    Scoped on purpose: only processes belonging to an `owned_marker` prefix are
+    touched. The old blanket `pkill -9 -f winetricks` matched *any* command line
+    containing that word (an editor, a grep) and would have killed the Wine of
+    entirely unrelated applications too.
+
+    `owned_marker` and `target_names` are parameters so tests can aim this at a
+    throw-away prefix instead of a live install."""
+    if target_names is None:
+        target_names = {"winetricks", "wineserver", "winedevice.exe", "winedevice"}
     killed_any = False
-    for display_name, patterns in targets:
-        for pattern in patterns:
-            try:
-                subprocess.run(
-                    ["pkill", "-9", "-x", pattern],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                result = subprocess.run(
-                    ["pkill", "-9", "-f", pattern],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                if result.returncode == 0:
-                    killed_any = True
-                    print(f"[Cleanup] Killed leftover {display_name} process(es)")
-            except Exception:
+
+    try:
+        entries = os.listdir("/proc")
+    except Exception:
+        entries = []
+
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == os.getpid():
+            continue
+
+        try:
+            with open(f"/proc/{pid}/environ", "rb") as handle:
+                environ = handle.read()
+        except Exception:
+            continue
+
+        wineprefix = None
+        for item in environ.split(b"\0"):
+            if item.startswith(b"WINEPREFIX="):
+                wineprefix = item.split(b"=", 1)[1].decode("utf-8", "replace")
+                break
+
+        cmdline_text = ""
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as handle:
+                argv = handle.read().split(b"\0")
+                cmdline_text = b" ".join(argv).decode("utf-8", "replace")
+        except Exception:
+            argv = []
+
+        ours = bool(wineprefix and wineprefix.rstrip("/").endswith(owned_marker))
+        if not ours and owned_marker not in cmdline_text:
+            continue  # some other prefix: Steam, games, a hand-made one
+
+        # comm covers native processes (wineserver, winedevice.exe); argv[0]/[1]
+        # cover winetricks whether the kernel reports it as the script or the
+        # interpreter.
+        names = set()
+        try:
+            with open(f"/proc/{pid}/comm", "r") as handle:
+                names.add(handle.read().strip())
+        except Exception:
+            pass
+        for arg in argv[:2]:
+            if not arg:
                 continue
+            base = arg.decode("utf-8", "replace").replace("\\", "/").rsplit("/", 1)[-1]
+            if base:
+                names.add(base)
+
+        hit = names & target_names
+        if not hit:
+            continue
+
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed_any = True
+            where = wineprefix or cmdline_text
+            print(
+                f"[Cleanup] Killed leftover {'/'.join(sorted(hit))} "
+                f"(pid {pid}) in {where}"
+            )
+        except Exception:
+            continue
+
     if not killed_any:
         print("[Cleanup] No stale Wine processes found - starting clean")
 
